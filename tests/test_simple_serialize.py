@@ -1,9 +1,11 @@
 import array
 import datetime
+import decimal
 import enum
 import json
 import pathlib
 import re
+import uuid
 from collections.abc import Iterable
 from dataclasses import FrozenInstanceError, dataclass, field
 
@@ -417,6 +419,45 @@ def test_builtin_value_round_trips(value):
 
     assert type(result) is type(value)
     assert result == value
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        decimal.Decimal("0.000"),
+        decimal.Decimal("-1.23456789012345678901234567890"),
+        decimal.Decimal("1E+100"),
+        decimal.Decimal("Infinity"),
+    ],
+)
+def test_decimal_round_trip_preserves_exact_text(value):
+    result = deserialize(serialize(value))
+
+    assert type(result) is decimal.Decimal
+    assert str(result) == str(value)
+
+
+def test_decimal_deserializer_rejects_non_string_data():
+    payload = f'{{"{TYPE_KEY}": "Decimal", "{DATA_KEY}": 1.25}}'
+
+    with pytest.raises(TypeError, match="Decimal data must be a string"):
+        deserialize(payload)
+
+
+def test_uuid_round_trip():
+    value = uuid.UUID("12345678-1234-5678-1234-567812345678")
+
+    result = deserialize(serialize(value))
+
+    assert type(result) is uuid.UUID
+    assert result == value
+
+
+def test_uuid_deserializer_rejects_non_string_data():
+    payload = f'{{"{TYPE_KEY}": "UUID", "{DATA_KEY}": 123}}'
+
+    with pytest.raises(TypeError, match="UUID data must be a string"):
+        deserialize(payload)
 
 
 @pytest.mark.parametrize(

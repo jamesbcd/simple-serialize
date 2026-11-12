@@ -8,12 +8,14 @@ values such as paths, dates, bytes, regular expressions, and containers.
 import enum
 import base64
 from dataclasses import fields, is_dataclass
+import decimal
 import inspect
 import json
 import os
 import pathlib
 import datetime
 import re
+import uuid
 from typing import Any, Callable, Iterable, cast, TypeVar, overload
 
 
@@ -41,6 +43,10 @@ __all__ = [
     "enum_deserializer",
     "complex_serializer",
     "complex_deserializer",
+    "decimal_serializer",
+    "decimal_deserializer",
+    "uuid_serializer",
+    "uuid_deserializer",
     "bytes_serializer",
     "bytes_deserializer",
     "bytearray_serializer",
@@ -1222,3 +1228,33 @@ def regex_deserializer(cls: type, data: object, options: dict[str, object], ctx:
 
 _registry.register(re.Pattern, regex_serializer, regex_deserializer)
 _registry.register(re.RegexFlag, enum_serializer, enum_deserializer)
+
+
+def decimal_serializer(obj: object, options: dict[str, object], ctx: object | None) -> str:
+    '''Encode a Decimal as text to preserve its exact value and exponent.'''
+    return str(cast(decimal.Decimal, obj))
+
+
+def decimal_deserializer(cls: type, data: object, options: dict[str, object], ctx: object | None) -> decimal.Decimal:
+    '''Reconstruct a Decimal from its exact text representation.'''
+    if not isinstance(data, str):
+        raise TypeError("Decimal data must be a string")
+    return decimal.Decimal(data)
+
+
+register(decimal.Decimal, decimal_serializer, decimal_deserializer)
+
+
+def uuid_serializer(obj: object, options: dict[str, object], ctx: object | None) -> str:
+    '''Encode a UUID using its canonical hyphenated string representation.'''
+    return str(cast(uuid.UUID, obj))
+
+
+def uuid_deserializer(cls: type, data: object, options: dict[str, object], ctx: object | None) -> uuid.UUID:
+    '''Reconstruct a UUID from its canonical string representation.'''
+    if not isinstance(data, str):
+        raise TypeError("UUID data must be a string")
+    return uuid.UUID(data)
+
+
+register(uuid.UUID, uuid_serializer, uuid_deserializer)
