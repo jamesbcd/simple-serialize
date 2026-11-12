@@ -155,6 +155,25 @@ def test_builtin_value_round_trips(value):
     assert result == value
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        datetime.timedelta(days=999999, microseconds=1),
+        datetime.timedelta(days=-999999, microseconds=1),
+        datetime.timedelta(microseconds=-1),
+    ],
+)
+def test_timedelta_round_trip_preserves_microseconds(value):
+    assert deserialize(serialize(value)) == value
+
+
+def test_timedelta_deserializer_rejects_legacy_seconds_payload():
+    payload = f'{{"{TYPE_KEY}": "timedelta", "{DATA_KEY}": 1.25}}'
+
+    with pytest.raises(TypeError, match="Timedelta data"):
+        deserialize(payload)
+
+
 @pytest.mark.parametrize("value", [b"", b"\x00\xff\x80binary", b"utf-8 \xe2\x98\x83"])
 def test_bytes_round_trip(value):
     result = deserialize(serialize(value))

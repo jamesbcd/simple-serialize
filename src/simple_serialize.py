@@ -846,33 +846,43 @@ register(datetime.date,     cast(Serializer, isoformat_serializer), cast(Deseria
 register(datetime.time,     cast(Serializer, isoformat_serializer), cast(Deserializer, isoformat_deserializer))
 
 
-def timedelta_serializer(obj: object, ctx: Context) -> float:
-    '''Encode a duration as a floating-point number of seconds.
+def timedelta_serializer(obj: object, ctx: Context) -> dict[str, int]:
+    '''Encode a duration as exact integer day, second, and microsecond components.
 
     Args:
         obj: Duration to serialize.
         ctx: Unused context, accepted to match the serializer interface.
 
     Returns:
-        The duration's total seconds.
+        A dictionary containing the normalized duration components.
     '''
     obj = cast(datetime.timedelta, obj)
-    return obj.total_seconds()
+    return {
+        "days": obj.days,
+        "seconds": obj.seconds,
+        "microseconds": obj.microseconds,
+    }
 
 
 def timedelta_deserializer(cls: type, data: object, ctx: Context) -> datetime.timedelta:
-    '''Reconstruct a duration from a floating-point number of seconds.
+    '''Reconstruct a duration from exact integer components. (Storing a floating-point
+    number of seconds can fail to preserve the correct number of microseconds.)
 
     Args:
         cls: Unused class argument required by the deserializer interface.
-        data: Duration in seconds.
+        data: A dictionary containing days, seconds, and microseconds.
         ctx: Unused context, accepted to match the deserializer interface.
 
     Returns:
         A :class:`datetime.timedelta`.
     '''
-    data = cast(float, data)
-    return datetime.timedelta(seconds=float(data))
+    if not isinstance(data, dict):
+        raise TypeError("Timedelta data must contain days, seconds, and microseconds")
+    return datetime.timedelta(
+        days=data["days"],
+        seconds=data["seconds"],
+        microseconds=data["microseconds"],
+    )
 
 
 register(datetime.timedelta, timedelta_serializer, timedelta_deserializer)
