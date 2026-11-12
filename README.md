@@ -86,6 +86,36 @@ restored = deserialize(json_text, ctx)
 The library does not inspect or modify `ctx`; define and interpret its structure
 in your own callbacks.
 
+## Attribute options
+
+The default serializers for ordinary classes and dataclasses recognize three
+registration options:
+
+- `exclude`: a list of attribute or field names omitted from serialized data.
+- `select`: a list of the only attribute or field names to serialize. When both
+  `select` and `exclude` are supplied, `select` takes precedence.
+- `rename`: a mapping from Python attribute or field names to JSON names.
+  Renamed names are mapped back during deserialization.
+
+Names in `select` and `exclude` refer to Python attribute or field names, before
+any renaming. For example:
+
+```python
+@serializable(
+    exclude=["password"],
+    rename={"first_name": "firstName"},
+)
+@dataclass
+class Account:
+    first_name: str
+    password: str
+```
+
+An excluded or unselected value is not present in the JSON data. It therefore
+needs a suitable default or otherwise compatible constructor if the object is
+to be deserialized. Custom serialization callbacks receive these options in
+their options dictionary and remain responsible for applying them.
+
 ## Custom serialization
 
 For a decorated class, define `_serialize(self, options, ctx)` and

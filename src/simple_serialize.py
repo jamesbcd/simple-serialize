@@ -29,6 +29,26 @@ __all__ = [
     "load",
     "serialize",
     "deserialize",
+    "standard_serializer",
+    "standard_deserializer",
+    "iterable_serializer",
+    "iterable_deserializer",
+    "mapping_serializer",
+    "mapping_deserializer",
+    "dataclass_serializer",
+    "dataclass_deserializer",
+    "enum_serializer",
+    "enum_deserializer",
+    "bytes_serializer",
+    "bytes_deserializer",
+    "path_serializer",
+    "path_deserializer",
+    "isoformat_serializer",
+    "isoformat_deserializer",
+    "timedelta_serializer",
+    "timedelta_deserializer",
+    "regex_serializer",
+    "regex_deserializer",
 ]
 
 
@@ -527,6 +547,68 @@ def _get_slot_names(cls: type) -> set[str]:
     return names
 
 
+def _attribute_options(
+    options: dict[str, object],
+) -> tuple[set[str] | None, set[str], dict[str, str]]:
+    '''Return validated select, exclude, and rename attribute options.'''
+    select = options.get("select")
+    if select is not None and (
+        not isinstance(select, list)
+        or not all(isinstance(name, str) for name in select)
+    ):
+        raise TypeError("select option must be a list of attribute names")
+    exclude = options.get("exclude", [])
+    if (
+        not isinstance(exclude, list)
+        or not all(isinstance(name, str) for name in exclude)
+    ):
+        raise TypeError("exclude option must be a list of attribute names")
+    rename = options.get("rename", {})
+    if not isinstance(rename, dict) or not all(
+        isinstance(name, str) and isinstance(alias, str)
+        for name, alias in rename.items()
+    ):
+        raise TypeError("rename option must map attribute names to strings")
+    return (
+        set(select) if select is not None else None,
+        set(exclude),
+        cast(dict[str, str], rename),
+    )
+
+
+def _serialize_attributes(
+    attributes: dict[str, object], options: dict[str, object]
+) -> dict[str, object]:
+    '''Filter and rename an attribute dictionary using registration options.'''
+    select, exclude, rename = _attribute_options(options)
+    serialized = {}
+    for name, value in attributes.items():
+        if select is not None:
+            if name not in select:
+                continue
+        elif name in exclude:
+            continue
+        serialized_name = rename.get(name, name)
+        if serialized_name in serialized:
+            raise ValueError(
+                f"Multiple attributes serialize as {serialized_name!r}"
+            )
+        serialized[serialized_name] = value
+    return serialized
+
+
+def _deserialize_attributes(
+    attributes: dict[str, object], options: dict[str, object]
+) -> dict[str, object]:
+    '''Map serialized attribute names back to their Python names.'''
+    _, _, rename = _attribute_options(options)
+    original_names = {alias: name for name, alias in rename.items()}
+    return {
+        original_names.get(name, name): value
+        for name, value in attributes.items()
+    }
+
+
 def standard_serializer(obj: object, options: dict[str, object], ctx: object | None) -> dict:
     '''Copy an ordinary object's instance attributes into a dictionary.
 
@@ -552,7 +634,7 @@ def standard_serializer(obj: object, options: dict[str, object], ctx: object | N
         raise TypeError(
             f"Failed to serialize object of type {type(obj).__name__}"
         ) from e
-    return new_obj
+    return _serialize_attributes(new_obj, options)
 
 def standard_deserializer(cls: type, data: object, options: dict[str, object], ctx: object | None) -> object:
     '''Construct an ordinary class and restore its instance attributes.
@@ -574,7 +656,7 @@ def standard_deserializer(cls: type, data: object, options: dict[str, object], c
     '''
     try:
         instance = cls()
-        attributes = dict(cast(dict, data))
+        attributes = _deserialize_attributes(dict(cast(dict, data)), options)
         slot_names = _get_slot_names(cls)
         slot_attributes = {
             name: value for name, value in attributes.items() if name in slot_names
@@ -588,6 +670,69 @@ def standard_deserializer(cls: type, data: object, options: dict[str, object], c
             )
         for name, value in slot_attributes.items():
             setattr(instance, name, value)
+    except Exception as e:
+        raise TypeError(
+            f"Failed to deserialize object of type {cls.__name__}: {e}"
+        ) from e
+    return instance
+
+def dataclass_serializer(obj: object, options: dict[str, object], ctx: object | None) -> dict:
+    '''Serialize a dataclass instance as a field-name/value dictionary.
+
+    Args:
+        obj: Dataclass instance to serialize.
+        ctx: Unused context, accepted to match the serializer interface.
+
+    Returns:
+        A dictionary containing the values of the dataclass fields.
+
+    Raises:
+        TypeError: If ``obj`` is not a dataclass instance.
+    '''
+    if not is_dataclass(obj):
+        raise TypeError(f"Object of type {type(obj).__name__} is not a dataclass")
+    attributes = {field.name: getattr(obj, field.name) for field in fields(obj)}
+    return _serialize_attributes(attributes, options)
+
+
+def dataclass_deserializer(cls: type, data: object, options: dict[str, object], ctx: object | None) -> object:
+    '''Reconstruct a dataclass by passing decoded fields to its constructor.
+
+    Constructor-based reconstruction also supports frozen dataclasses without
+    assigning to their attributes after creation.
+
+    Args:
+        cls: Dataclass type to construct.
+        data: Mapping of field names to decoded values.
+        ctx: Unused context, accepted to match the deserializer interface.
+
+    Returns:
+        The reconstructed dataclass instance.
+
+    Raises:
+        TypeError: If construction fails; the original exception is preserved
+            as the cause.
+    '''
+    data = cast(dict, data)
+    try:
+        data = _deserialize_attributes(data, options)
+        dataclass_fields = fields(cls)
+        init_field_names = {
+            dataclass_field.name for dataclass_field in dataclass_fields
+            if dataclass_field.init
+        }
+        init_data = {
+            name: value for name, value in data.items()
+            if name in init_field_names
+        }
+        instance = cls(**init_data)
+        for dataclass_field in dataclass_fields:
+            if not dataclass_field.init and dataclass_field.name in data:
+                object.__setattr__(
+                    instance,
+                    dataclass_field.name,
+                    data[dataclass_field.name],
+                )
     except Exception as e:
         raise TypeError(
             f"Failed to deserialize object of type {cls.__name__}: {e}"
@@ -658,68 +803,6 @@ def mapping_deserializer(cls: type, data: object, options: dict[str, object], ct
     '''
     data = cast(dict, data)
     return cls(data)
-
-
-def dataclass_serializer(obj: object, options: dict[str, object], ctx: object | None) -> dict:
-    '''Serialize a dataclass instance as a field-name/value dictionary.
-
-    Args:
-        obj: Dataclass instance to serialize.
-        ctx: Unused context, accepted to match the serializer interface.
-
-    Returns:
-        A dictionary containing the values of the dataclass fields.
-
-    Raises:
-        TypeError: If ``obj`` is not a dataclass instance.
-    '''
-    if not is_dataclass(obj):
-        raise TypeError(f"Object of type {type(obj).__name__} is not a dataclass")
-    return {field.name: getattr(obj, field.name) for field in fields(obj)}
-
-
-def dataclass_deserializer(cls: type, data: object, options: dict[str, object], ctx: object | None) -> object:
-    '''Reconstruct a dataclass by passing decoded fields to its constructor.
-
-    Constructor-based reconstruction also supports frozen dataclasses without
-    assigning to their attributes after creation.
-
-    Args:
-        cls: Dataclass type to construct.
-        data: Mapping of field names to decoded values.
-        ctx: Unused context, accepted to match the deserializer interface.
-
-    Returns:
-        The reconstructed dataclass instance.
-
-    Raises:
-        TypeError: If construction fails; the original exception is preserved
-            as the cause.
-    '''
-    data = cast(dict, data)
-    try:
-        dataclass_fields = fields(cls)
-        init_field_names = {
-            dataclass_field.name for dataclass_field in dataclass_fields
-            if dataclass_field.init
-        }
-        init_data = {
-            name: value for name, value in data.items()
-            if name in init_field_names
-        }
-        instance = cls(**init_data)
-        for dataclass_field in dataclass_fields:
-            if not dataclass_field.init and dataclass_field.name in data:
-                object.__setattr__(
-                    instance,
-                    dataclass_field.name,
-                    data[dataclass_field.name],
-                )
-    except Exception as e:
-        raise TypeError(
-            f"Failed to deserialize object of type {cls.__name__}: {e}"
-        ) from e
-    return instance
 
 #
 # Custom serializers and deserializers for common types

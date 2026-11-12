@@ -1,5 +1,6 @@
 import datetime
 import enum
+import json
 import pathlib
 import re
 from collections.abc import Iterable
@@ -226,6 +227,66 @@ def test_register_options_are_passed_before_context():
 
     assert isinstance(result, ExternalValue)
     assert result.value == 21
+
+
+def test_standard_serializer_excludes_attributes():
+    @serializable("SerializeTestExclude", exclude=["secret"])
+    class TestExcluded:
+        def __init__(self):
+            self.value = 42
+            self.secret = "hidden"
+
+    serialized = serialize(TestExcluded())
+
+    assert json.loads(serialized)[DATA_KEY] == {"value": 42}
+    result = deserialize(serialized)
+    assert isinstance(result, TestExcluded)
+    assert result.value == 42
+    assert result.secret == "hidden"
+
+
+def test_select_takes_precedence_over_exclude_and_renames_attributes():
+    @serializable(
+        "SerializeTestSelectRename",
+        select=["value", "secret"],
+        exclude=["secret"],
+        rename={"secret": "private"},
+    )
+    class TestSelected:
+        def __init__(self):
+            self.value = 42
+            self.secret = "hidden"
+            self.other = "excluded by select"
+
+    serialized = serialize(TestSelected())
+
+    assert json.loads(serialized)[DATA_KEY] == {
+        "value": 42,
+        "private": "hidden",
+    }
+    result = deserialize(serialized)
+    assert isinstance(result, TestSelected)
+    assert result.value == 42
+    assert result.secret == "hidden"
+    assert result.other == "excluded by select"
+
+
+def test_dataclass_attribute_options_round_trip():
+    @serializable(
+        "SerializeTestDataclassAttributeOptions",
+        exclude=["secret"],
+        rename={"first_name": "firstName"},
+    )
+    @dataclass
+    class TestPerson:
+        first_name: str
+        secret: str = "default"
+
+    person = TestPerson("Ada", "not serialized")
+    serialized = serialize(person)
+
+    assert json.loads(serialized)[DATA_KEY] == {"firstName": "Ada"}
+    assert deserialize(serialized) == TestPerson("Ada")
 
 
 def test_registered_subclass_takes_priority_over_registered_base():
