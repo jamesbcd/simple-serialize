@@ -31,6 +31,30 @@ def test_standard_decorated_object_round_trips():
     assert result.value == 42
 
 
+def test_standard_decorated_slotted_object_round_trips():
+    class TestSlotBase:
+        __slots__ = ("base_value",)
+
+    @serializable("SerializeTestSlottedObject")
+    class TestSlottedObject(TestSlotBase):
+        __slots__ = ("value", "__private_value")
+
+        def __init__(self):
+            self.base_value = "base"
+            self.value = 42
+            self.__private_value = "private"
+
+        def private_value(self):
+            return self.__private_value
+
+    result = deserialize(serialize(TestSlottedObject()))
+
+    assert isinstance(result, TestSlottedObject)
+    assert result.base_value == "base"
+    assert result.value == 42
+    assert result.private_value() == "private"
+
+
 def test_custom_serializer_and_deserializer_round_trip():
     @serializable("SerializeTestCustom")
     class TestCustom:

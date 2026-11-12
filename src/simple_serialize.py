@@ -402,7 +402,8 @@ def serializable(cls_or_json_name: type | str, *args, **kwargs) -> Any:
     Use as ``@serializable`` or ``@serializable("CustomName")``. The class
     remains unchanged after registration. Unless it provides custom callbacks,
     enums use enum-specific handling, dataclasses use field-based handling,
-    and other classes use their instance ``__dict__``.
+    and other classes use their instance attributes, including ``__dict__``
+    entries and ``__slots__``.
 
     A decorated class can customize serialization by implementing:
 
@@ -496,21 +497,39 @@ def _get_serializers_for_decorated_class(cls: type) -> tuple[Serializer, Deseria
 # Standard serializers and deserializers
 #
 
+def _get_slot_names(cls: type) -> set[str]:
+    '''Return the slot attribute names declared across ``cls``'s MRO.'''
+    names = set()
+    for base in cls.__mro__:
+        slots = base.__dict__.get("__slots__", ())
+        if isinstance(slots, str):
+            slots = (slots,)
+        for name in slots:
+            if name in ("__dict__", "__weakref__"):
+                continue
+            if name.startswith("__") and not name.endswith("__"):
+                name = f"_{base.__name__.lstrip('_')}{name}"
+            names.add(name)
+    return names
+
+
 def standard_serializer(obj: object, ctx: Context) -> dict:
     '''Copy an ordinary object's instance attributes into a dictionary.
 
     Args:
-        obj: Object whose ``__dict__`` will be copied.
+        obj: Object whose ``__dict__`` and ``__slots__`` will be copied.
         ctx: Unused context, accepted to match the serializer interface.
 
     Returns:
-        A shallow copy of the object's instance dictionary.
-
-    Raises:
-        TypeError: If the object has no readable instance dictionary.
+        A shallow copy of the object's initialized instance attributes.
     '''
     try:
-        new_obj = dict(obj.__dict__)
+        new_obj = dict(getattr(obj, "__dict__", {}))
+        for name in _get_slot_names(type(obj)):
+            try:
+                new_obj[name] = getattr(obj, name)
+            except AttributeError:
+                continue
     except Exception:
         raise TypeError(f"Failed to serialize object of type {type(obj).__name__}")
     return new_obj
@@ -519,7 +538,7 @@ def standard_deserializer(cls: type, data: object, ctx: Context) -> object:
     '''Construct an ordinary class and restore its instance attributes.
 
     The class must be constructible without arguments. The decoded data is
-    applied by updating the new instance's ``__dict__``.
+    applied to its ``__dict__`` and declared slots.
 
     Args:
         cls: Class to instantiate.
@@ -532,10 +551,22 @@ def standard_deserializer(cls: type, data: object, ctx: Context) -> object:
     Raises:
         TypeError: If construction or attribute restoration fails.
     '''
-    data = cast(dict, data)
     try:
         instance = cls()
-        instance.__dict__.update(data)
+        attributes = dict(cast(dict, data))
+        slot_names = _get_slot_names(cls)
+        slot_attributes = {
+            name: value for name, value in attributes.items() if name in slot_names
+        }
+        instance_dict = getattr(instance, "__dict__", None)
+        if instance_dict is not None:
+            instance_dict.update(
+                (name, value)
+                for name, value in attributes.items()
+                if name not in slot_names
+            )
+        for name, value in slot_attributes.items():
+            setattr(instance, name, value)
     except Exception as e:
         raise TypeError(f"Failed to deserialize object of type {cls.__name__}: {e}")
     return instance
