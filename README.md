@@ -188,7 +188,11 @@ can be serialized directly. The library also has built-in handlers for:
 
 - `tuple`, `set`, and `frozenset` (encoded as JSON arrays; set iteration order
   is not guaranteed)
-- `bytes` (base64 encoded)
+- `complex` (real and imaginary components)
+- `bytes` and `bytearray` (base64 encoded)
+- `memoryview` (contents, format, shape, and read-only state; only contiguous
+  views are supported, and the original backing buffer is not retained)
+- `range` and `slice` (start, stop, and step values)
 - `pathlib.Path`
 - `datetime.datetime`, `datetime.date`, `datetime.time`, and
   `datetime.timedelta`

@@ -39,8 +39,18 @@ __all__ = [
     "dataclass_deserializer",
     "enum_serializer",
     "enum_deserializer",
+    "complex_serializer",
+    "complex_deserializer",
     "bytes_serializer",
     "bytes_deserializer",
+    "bytearray_serializer",
+    "bytearray_deserializer",
+    "memoryview_serializer",
+    "memoryview_deserializer",
+    "range_serializer",
+    "range_deserializer",
+    "slice_serializer",
+    "slice_deserializer",
     "path_serializer",
     "path_deserializer",
     "isoformat_serializer",
@@ -806,6 +816,41 @@ register(set, iterable_serializer, iterable_deserializer)
 register(frozenset, iterable_serializer, iterable_deserializer)
 
 
+def range_serializer(obj: object, options: dict[str, object], ctx: object | None) -> dict[str, int]:
+    '''Encode a range using its start, stop, and step values.'''
+    obj = cast(range, obj)
+    return {"start": obj.start, "stop": obj.stop, "step": obj.step}
+
+
+def range_deserializer(cls: type, data: object, options: dict[str, object], ctx: object | None) -> range:
+    '''Reconstruct a range from its start, stop, and step values.'''
+    data = cast(dict, data)
+    values = (data.get("start"), data.get("stop"), data.get("step"))
+    if not all(type(value) is int for value in values):
+        raise TypeError("Range data must contain integer start, stop, and step values")
+    return range(*values)
+
+
+register(range, range_serializer, range_deserializer)
+
+
+def slice_serializer(obj: object, options: dict[str, object], ctx: object | None) -> dict[str, object]:
+    '''Encode a slice using its start, stop, and step values.'''
+    obj = cast(slice, obj)
+    return {"start": obj.start, "stop": obj.stop, "step": obj.step}
+
+
+def slice_deserializer(cls: type, data: object, options: dict[str, object], ctx: object | None) -> slice:
+    '''Reconstruct a slice from its start, stop, and step values.'''
+    data = cast(dict, data)
+    if not all(key in data for key in ("start", "stop", "step")):
+        raise TypeError("Slice data must contain start, stop, and step values")
+    return slice(data["start"], data["stop"], data["step"])
+
+
+register(slice, slice_serializer, slice_deserializer)
+
+
 def mapping_serializer(obj: object, options: dict[str, object], ctx: object | None) -> dict:
     '''Copy a mapping, applying attribute options to its string keys.
 
@@ -897,6 +942,31 @@ def enum_deserializer(cls: type, data: object, options: dict[str, object], ctx: 
     data = cast(dict, data)
     return cls(data["value"])
 
+
+def complex_serializer(obj: object, options: dict[str, object], ctx: object | None) -> dict[str, float]:
+    '''Encode a complex number using its real and imaginary components.'''
+    obj = cast(complex, obj)
+    return {"real": obj.real, "imag": obj.imag}
+
+
+def complex_deserializer(cls: type, data: object, options: dict[str, object], ctx: object | None) -> complex:
+    '''Reconstruct a complex number from its real and imaginary components.'''
+    data = cast(dict, data)
+    real = data.get("real")
+    imag = data.get("imag")
+    if (
+        not isinstance(real, (int, float))
+        or isinstance(real, bool)
+        or not isinstance(imag, (int, float))
+        or isinstance(imag, bool)
+    ):
+        raise TypeError("Complex data must contain numeric real and imag values")
+    return complex(real, imag)
+
+
+register(complex, complex_serializer, complex_deserializer)
+
+
 # Bytes serializers and deserializers
 
 def bytes_serializer(obj: object, options: dict[str, object], ctx: object | None) -> dict:
@@ -936,6 +1006,62 @@ def bytes_deserializer(cls: type, data: object, options: dict[str, object], ctx:
     return base64.b64decode(data["value"], validate=True)
 
 register(bytes, bytes_serializer, bytes_deserializer)
+
+
+def bytearray_serializer(obj: object, options: dict[str, object], ctx: object | None) -> dict:
+    '''Encode a bytearray using the bytes base64 representation.'''
+    return bytes_serializer(bytes(cast(bytearray, obj)), options, ctx)
+
+
+def bytearray_deserializer(cls: type, data: object, options: dict[str, object], ctx: object | None) -> bytearray:
+    '''Reconstruct a bytearray from the bytes base64 representation.'''
+    return bytearray(bytes_deserializer(bytes, data, options, ctx))
+
+
+register(bytearray, bytearray_serializer, bytearray_deserializer)
+
+
+def memoryview_serializer(obj: object, options: dict[str, object], ctx: object | None) -> dict[str, object]:
+    '''Encode a contiguous memoryview's contents, format, shape, and access mode.'''
+    view = cast(memoryview, obj)
+    if not view.contiguous:
+        raise TypeError("Only contiguous memoryviews can be serialized")
+    raw = view.tobytes(order="C")
+    try:
+        memoryview(raw).cast(view.format, shape=list(view.shape))
+    except (TypeError, ValueError) as exc:
+        raise TypeError(
+            f"Memoryview format {view.format!r} cannot be reconstructed"
+        ) from exc
+    return {
+        "data": bytes_serializer(raw, options, ctx),
+        "format": view.format,
+        "shape": list(view.shape),
+        "readonly": view.readonly,
+    }
+
+
+def memoryview_deserializer(cls: type, data: object, options: dict[str, object], ctx: object | None) -> memoryview:
+    '''Reconstruct a contiguous memoryview from its contents and metadata.'''
+    data = cast(dict, data)
+    format = data.get("format")
+    shape = data.get("shape")
+    readonly = data.get("readonly")
+    if (
+        not isinstance(format, str)
+        or not isinstance(shape, list)
+        or not all(type(dimension) is int and dimension >= 0 for dimension in shape)
+        or not isinstance(readonly, bool)
+        or "data" not in data
+    ):
+        raise TypeError("Memoryview data must contain format, shape, readonly, and data values")
+    raw = bytes_deserializer(bytes, data["data"], options, ctx)
+    buffer = raw if readonly else bytearray(raw)
+    return memoryview(buffer).cast(format, shape=shape)
+
+
+register(memoryview, memoryview_serializer, memoryview_deserializer)
+
 
 # Path serializers and deserializers
 

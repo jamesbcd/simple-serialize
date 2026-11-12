@@ -1,3 +1,4 @@
+import array
 import datetime
 import enum
 import json
@@ -404,6 +405,8 @@ def test_duplicate_class_and_json_name_registration_is_rejected():
     "value",
     [
         pathlib.Path("a/b"),
+        complex(1.5, -2.25),
+        range(9, -3, -2),
         datetime.datetime(2024, 1, 2, 3, 4),
         datetime.date(2024, 1, 2),
         datetime.time(3, 4),
@@ -440,6 +443,57 @@ def test_bytes_round_trip(value):
     result = deserialize(serialize(value))
 
     assert result == value
+
+
+def test_bytearray_round_trip():
+    value = bytearray(b"\x00\xffbinary")
+
+    result = deserialize(serialize(value))
+
+    assert type(result) is bytearray
+    assert result == value
+    result[0] = 1
+    assert value[0] == 0
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        memoryview(b"abc"),
+        memoryview(bytearray(b"abcdef")).cast("B", shape=(2, 3)),
+        memoryview(array.array("i", [1, 2, 3])),
+    ],
+)
+def test_memoryview_round_trip_preserves_metadata(value):
+    result = deserialize(serialize(value))
+
+    assert type(result) is memoryview
+    assert result.format == value.format
+    assert result.shape == value.shape
+    assert result.readonly is value.readonly
+    assert result.tobytes() == value.tobytes()
+
+
+def test_memoryview_round_trip_preserves_mutability():
+    result = deserialize(serialize(memoryview(bytearray(b"abc"))))
+
+    result[0] = ord("z")
+    assert result.tobytes() == b"zbc"
+
+
+def test_non_contiguous_memoryview_cannot_be_serialized():
+    value = memoryview(bytearray(b"abcdef"))[::2]
+
+    with pytest.raises(TypeError, match="contiguous memoryviews"):
+        serialize(value)
+
+
+@pytest.mark.parametrize("value", [slice(None, 10, 2), slice(1, -1), slice(3, 3, -1)])
+def test_slice_round_trip(value):
+    result = deserialize(serialize(value))
+
+    assert type(result) is slice
+    assert (result.start, result.stop, result.step) == (value.start, value.stop, value.step)
 
 
 def test_string_regex_pattern_and_flags_round_trip():
