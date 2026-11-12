@@ -524,6 +524,10 @@ def standard_serializer(obj: object, ctx: Context) -> dict:
 
     Returns:
         A shallow copy of the object's initialized instance attributes.
+
+    Raises:
+        TypeError: If reading instance attributes fails; the original exception
+            is preserved as the cause.
     '''
     try:
         new_obj = dict(getattr(obj, "__dict__", {}))
@@ -532,8 +536,10 @@ def standard_serializer(obj: object, ctx: Context) -> dict:
                 new_obj[name] = getattr(obj, name)
             except AttributeError:
                 continue
-    except Exception:
-        raise TypeError(f"Failed to serialize object of type {type(obj).__name__}")
+    except Exception as e:
+        raise TypeError(
+            f"Failed to serialize object of type {type(obj).__name__}"
+        ) from e
     return new_obj
 
 def standard_deserializer(cls: type, data: object, ctx: Context) -> object:
@@ -551,7 +557,8 @@ def standard_deserializer(cls: type, data: object, ctx: Context) -> object:
         The reconstructed instance.
 
     Raises:
-        TypeError: If construction or attribute restoration fails.
+        TypeError: If construction or attribute restoration fails; the original
+            exception is preserved as the cause.
     '''
     try:
         instance = cls()
@@ -570,7 +577,9 @@ def standard_deserializer(cls: type, data: object, ctx: Context) -> object:
         for name, value in slot_attributes.items():
             setattr(instance, name, value)
     except Exception as e:
-        raise TypeError(f"Failed to deserialize object of type {cls.__name__}: {e}")
+        raise TypeError(
+            f"Failed to deserialize object of type {cls.__name__}: {e}"
+        ) from e
     return instance
 
 def iterable_serializer(obj: object, ctx: Context) -> list:
@@ -672,7 +681,8 @@ def dataclass_deserializer(cls: type, data: object, ctx: Context) -> object:
         The reconstructed dataclass instance.
 
     Raises:
-        TypeError: If construction fails.
+        TypeError: If construction fails; the original exception is preserved
+            as the cause.
     '''
     data = cast(dict, data)
     try:
@@ -694,7 +704,9 @@ def dataclass_deserializer(cls: type, data: object, ctx: Context) -> object:
                     data[dataclass_field.name],
                 )
     except Exception as e:
-        raise TypeError(f"Failed to deserialize object of type {cls.__name__}: {e}")
+        raise TypeError(
+            f"Failed to deserialize object of type {cls.__name__}: {e}"
+        ) from e
     return instance
 
 #

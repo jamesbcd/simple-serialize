@@ -18,6 +18,9 @@ from simple_serialize import (
     save,
     serializable,
     serialize,
+    dataclass_deserializer,
+    standard_deserializer,
+    standard_serializer,
 )
 
 
@@ -55,6 +58,47 @@ def test_standard_decorated_slotted_object_round_trips():
     assert result.base_value == "base"
     assert result.value == 42
     assert result.private_value() == "private"
+
+
+def test_standard_serializer_preserves_original_exception_as_cause():
+    class BrokenObject:
+        def __getattribute__(self, name):
+            if name == "__dict__":
+                raise ValueError("attribute access failed")
+            return super().__getattribute__(name)
+
+    with pytest.raises(TypeError, match="Failed to serialize") as exc_info:
+        standard_serializer(BrokenObject(), Context())
+
+    assert isinstance(exc_info.value.__cause__, ValueError)
+    assert str(exc_info.value.__cause__) == "attribute access failed"
+
+
+def test_standard_deserializer_preserves_original_exception_as_cause():
+    class BrokenObject:
+        def __init__(self):
+            raise ValueError("construction failed")
+
+    with pytest.raises(TypeError, match="Failed to deserialize") as exc_info:
+        standard_deserializer(BrokenObject, {}, Context())
+
+    assert isinstance(exc_info.value.__cause__, ValueError)
+    assert str(exc_info.value.__cause__) == "construction failed"
+
+
+def test_dataclass_deserializer_preserves_original_exception_as_cause():
+    @dataclass
+    class BrokenDataclass:
+        value: int
+
+        def __post_init__(self):
+            raise ValueError("post-init failed")
+
+    with pytest.raises(TypeError, match="Failed to deserialize") as exc_info:
+        dataclass_deserializer(BrokenDataclass, {"value": 1}, Context())
+
+    assert isinstance(exc_info.value.__cause__, ValueError)
+    assert str(exc_info.value.__cause__) == "post-init failed"
 
 
 def test_custom_serializer_and_deserializer_round_trip():
