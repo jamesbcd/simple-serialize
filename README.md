@@ -86,14 +86,14 @@ restored = deserialize(json_text, ctx)
 The library does not inspect or modify `ctx`; define and interpret its structure
 in your own callbacks.
 
-## Attribute options
+## Registration options
 
 The default serializers for ordinary classes and dataclasses recognize three
 registration options:
 
 - `exclude`: a list of attribute or field names omitted from serialized data.
-- `select`: a list of the only attribute or field names to serialize. When both
-  `select` and `exclude` are supplied, `select` takes precedence.
+- `select`: a list of the only attribute or field names to serialize (overrides
+  `exclude`).
 - `rename`: a mapping from Python attribute or field names to JSON names.
   Renamed names are mapped back during deserialization.
 
