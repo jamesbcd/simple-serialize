@@ -3,7 +3,7 @@ import enum
 import pathlib
 import re
 from collections.abc import Iterable
-from dataclasses import FrozenInstanceError, dataclass
+from dataclasses import FrozenInstanceError, dataclass, field
 
 import pytest
 
@@ -209,6 +209,41 @@ def test_frozen_dataclass_round_trips():
     assert type(result) is TestFrozenDataclass
     with pytest.raises(FrozenInstanceError):
         result.value = 0
+
+
+def test_dataclass_with_init_false_field_round_trips():
+    @serializable("SerializeTestDataclassInitFalse")
+    @dataclass
+    class TestDataclass:
+        value: int
+        cache: int = field(init=False, default=0)
+
+    value = TestDataclass(42)
+    value.cache = 84
+
+    result = deserialize(serialize(value))
+
+    assert result == value
+    assert result.cache == 84
+
+
+def test_frozen_slotted_dataclass_with_init_false_field_round_trips():
+    @serializable("SerializeTestFrozenSlottedDataclassInitFalse")
+    @dataclass(frozen=True, slots=True)
+    class TestDataclass:
+        value: int
+        cache: int = field(init=False, default=0)
+
+        def __post_init__(self):
+            object.__setattr__(self, "cache", self.value * 2)
+
+    value = TestDataclass(42)
+    object.__setattr__(value, "cache", 84)
+
+    result = deserialize(serialize(value))
+
+    assert result == value
+    assert result.cache == 84
 
 
 def test_dataclass_deserializer_ignores_unknown_fields():

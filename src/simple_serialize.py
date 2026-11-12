@@ -674,12 +674,23 @@ def dataclass_deserializer(cls: type, data: object, ctx: Context) -> object:
     '''
     data = cast(dict, data)
     try:
-        # In case the dataclass is frozen, it's more reliable to construct the instance
-        # by passing all the data as keyword arguments to the constructor.
-        # Extra fields in the data that are not part of the dataclass are ignored.
-        field_names = {field.name for field in fields(cls)}
-        known_data = {name: value for name, value in data.items() if name in field_names}
-        instance = cls(**known_data)
+        dataclass_fields = fields(cls)
+        init_field_names = {
+            dataclass_field.name for dataclass_field in dataclass_fields
+            if dataclass_field.init
+        }
+        init_data = {
+            name: value for name, value in data.items()
+            if name in init_field_names
+        }
+        instance = cls(**init_data)
+        for dataclass_field in dataclass_fields:
+            if not dataclass_field.init and dataclass_field.name in data:
+                object.__setattr__(
+                    instance,
+                    dataclass_field.name,
+                    data[dataclass_field.name],
+                )
     except Exception as e:
         raise TypeError(f"Failed to deserialize object of type {cls.__name__}: {e}")
     return instance
