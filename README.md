@@ -10,7 +10,13 @@ Requires Python 3.10 or later.
 
 ## Installation
 
-Install from the repository:
+Install the published package from PyPI:
+
+```shell
+python -m pip install simple-serialize
+```
+
+To install from a local checkout instead:
 
 ```shell
 python -m pip install .
