@@ -17,6 +17,22 @@ import re
 from typing import Any, Callable, Iterable, cast, TypeVar, overload
 
 
+__all__ = [
+    "TYPE_KEY",
+    "DATA_KEY",
+    "Context",
+    "Serializer",
+    "Deserializer",
+    "Pathlike",
+    "register",
+    "serializable",
+    "save",
+    "load",
+    "serialize",
+    "deserialize",
+]
+
+
 # Reserved keys identifying a registered type and its serialized data.
 TYPE_KEY = "__type__"
 DATA_KEY = "__data__"
