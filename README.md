@@ -189,19 +189,28 @@ can be serialized directly. The library also has built-in handlers for:
 - `tuple`, `set`, and `frozenset` (encoded as JSON arrays; set iteration order
   is not guaranteed)
 - `complex` (real and imaginary components)
+- `fractions.Fraction` (exact numerator and denominator)
 - `decimal.Decimal` (text representation, preserving precision and exponent)
 - `uuid.UUID` (canonical hyphenated string)
+- `ipaddress` address, network, and interface values (canonical text)
+- `collections.Counter`, `collections.OrderedDict`, and `collections.deque`
+  (including non-string keys, order, and `deque.maxlen`)
 - `bytes` and `bytearray` (base64 encoded)
 - `memoryview` (contents, format, shape, and read-only state; only contiguous
   views are supported, and the original backing buffer is not retained)
 - `range` and `slice` (start, stop, and step values)
 - `pathlib.Path`
 - `datetime.datetime`, `datetime.date`, `datetime.time`, and
-  `datetime.timedelta`
+  `datetime.timedelta` (`datetime.timezone` offsets/names and keyed
+  `zoneinfo.ZoneInfo` values are preserved for datetimes and times)
+- `datetime.timezone` and keyed `zoneinfo.ZoneInfo` values
 - Compiled regular expressions (`re.Pattern`) and `re.RegexFlag`
 
 Other Python classes, including enum and dataclass types, must be registered
-before use.
+before use. Restoring a `ZoneInfo` value requires the corresponding IANA
+timezone database entry to be available on the receiving system. Arbitrary
+custom `tzinfo` implementations are represented by their ISO offset rather
+than reconstructed as the original timezone object.
 
 ## Format and limitations
 

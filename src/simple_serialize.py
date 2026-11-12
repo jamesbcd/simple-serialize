@@ -7,9 +7,12 @@ values such as paths, dates, bytes, regular expressions, and containers.
 '''
 import enum
 import base64
+import collections
 from dataclasses import fields, is_dataclass
 import decimal
+from fractions import Fraction
 import inspect
+import ipaddress
 import json
 import os
 import pathlib
@@ -17,6 +20,7 @@ import datetime
 import re
 import uuid
 from typing import Any, Callable, Iterable, cast, TypeVar, overload
+from zoneinfo import ZoneInfo
 
 
 __all__ = [
@@ -45,8 +49,22 @@ __all__ = [
     "complex_deserializer",
     "decimal_serializer",
     "decimal_deserializer",
+    "fraction_serializer",
+    "fraction_deserializer",
     "uuid_serializer",
     "uuid_deserializer",
+    "timezone_serializer",
+    "timezone_deserializer",
+    "zoneinfo_serializer",
+    "zoneinfo_deserializer",
+    "ipaddress_serializer",
+    "ipaddress_deserializer",
+    "counter_serializer",
+    "counter_deserializer",
+    "ordered_dict_serializer",
+    "ordered_dict_deserializer",
+    "deque_serializer",
+    "deque_deserializer",
     "bytes_serializer",
     "bytes_deserializer",
     "bytearray_serializer",
@@ -1108,18 +1126,34 @@ register(pathlib.Path, path_serializer, path_deserializer)
 
 # Datetime serializers and deserializers
 
-def isoformat_serializer(obj: object, options: dict[str, object], ctx: object | None) -> str:
+def isoformat_serializer(
+    obj: object,
+    options: dict[str, object],
+    ctx: object | None,
+) -> str | dict[str, object]:
     '''Encode a date, time, or datetime using its ISO 8601 representation.
+
+    Datetimes and times with a fold value or reconstructable timezone also
+    store that metadata alongside the ISO representation.
 
     Args:
         obj: Temporal value to serialize.
         ctx: Unused context, accepted to match the serializer interface.
 
     Returns:
-        The value returned by ``obj.isoformat()``.
+        The ISO representation, optionally with fold and timezone metadata.
     '''
     obj = cast(datetime.datetime | datetime.date | datetime.time, obj)
-    return obj.isoformat()
+    value = obj.isoformat()
+    if not isinstance(obj, (datetime.datetime, datetime.time)):
+        return value
+
+    data: dict[str, object] = {"value": value, "fold": obj.fold}
+    if isinstance(obj.tzinfo, (datetime.timezone, ZoneInfo)):
+        data["tzinfo"] = obj.tzinfo
+    if obj.fold or "tzinfo" in data:
+        return data
+    return value
 
 
 def isoformat_deserializer(cls: type, data: object, options: dict[str, object],
@@ -1128,12 +1162,26 @@ def isoformat_deserializer(cls: type, data: object, options: dict[str, object],
 
     Args:
         cls: Registered ``datetime`` type.
-        data: ISO-formatted date, time, or datetime string.
+        data: ISO-formatted date, time, or datetime string, optionally accompanied
+            by fold and timezone metadata.
         ctx: Unused context, accepted to match the deserializer interface.
 
     Returns:
-        The value returned by ``cls.fromisoformat(data)``.
+        The value returned by ``cls.fromisoformat(data)`` with metadata restored
+        when present.
     '''
+    if isinstance(data, dict):
+        value = data.get("value")
+        fold = data.get("fold", 0)
+        tzinfo = data.get("tzinfo")
+        if (
+            not isinstance(value, str)
+            or type(fold) is not int
+            or fold not in (0, 1)
+            or (tzinfo is not None and not isinstance(tzinfo, datetime.tzinfo))
+        ):
+            raise TypeError("Temporal data must contain a valid value, fold, and timezone")
+        return cls.fromisoformat(value).replace(fold=fold, tzinfo=tzinfo)
     return cls.fromisoformat(str(data))
 
 
@@ -1258,3 +1306,230 @@ def uuid_deserializer(cls: type, data: object, options: dict[str, object], ctx: 
 
 
 register(uuid.UUID, uuid_serializer, uuid_deserializer)
+
+
+# Additional standard-library value handlers
+
+def fraction_serializer(
+    obj: object,
+    options: dict[str, object],
+    ctx: object | None,
+) -> dict[str, int]:
+    '''Encode a Fraction as its exact normalized numerator and denominator.'''
+    value = cast(Fraction, obj)
+    return {"numerator": value.numerator, "denominator": value.denominator}
+
+
+def fraction_deserializer(
+    cls: type,
+    data: object,
+    options: dict[str, object],
+    ctx: object | None,
+) -> Fraction:
+    '''Reconstruct a Fraction from exact integer components.'''
+    if not isinstance(data, dict):
+        raise TypeError("Fraction data must contain integer numerator and denominator")
+    numerator = data.get("numerator")
+    denominator = data.get("denominator")
+    if type(numerator) is not int or type(denominator) is not int:
+        raise TypeError("Fraction data must contain integer numerator and denominator")
+    if denominator == 0:
+        raise TypeError("Fraction denominator must not be zero")
+    return Fraction(numerator, denominator)
+
+
+register(Fraction, fraction_serializer, fraction_deserializer)
+
+
+def timezone_serializer(
+    obj: object,
+    options: dict[str, object],
+    ctx: object | None,
+) -> dict[str, object]:
+    '''Encode a fixed timezone by its exact offset and name.'''
+    value = cast(datetime.timezone, obj)
+    offset = value.utcoffset(None)
+    if offset is None:
+        raise TypeError("Timezone must have a fixed UTC offset")
+    return {
+        "offset_microseconds": (
+            (offset.days * 86400 + offset.seconds) * 1_000_000
+            + offset.microseconds
+        ),
+        "name": value.tzname(None),
+    }
+
+
+def timezone_deserializer(
+    cls: type,
+    data: object,
+    options: dict[str, object],
+    ctx: object | None,
+) -> datetime.timezone:
+    '''Reconstruct a fixed timezone from its exact offset and name.'''
+    if not isinstance(data, dict):
+        raise TypeError("Timezone data must contain an integer offset and optional name")
+    offset_microseconds = data.get("offset_microseconds")
+    name = data.get("name")
+    if (
+        type(offset_microseconds) is not int
+        or (name is not None and not isinstance(name, str))
+    ):
+        raise TypeError("Timezone data must contain an integer offset and optional name")
+    offset = datetime.timedelta(microseconds=offset_microseconds)
+    if name is None:
+        return datetime.timezone(offset)
+    return datetime.timezone(offset, name)
+
+
+register(datetime.timezone, timezone_serializer, timezone_deserializer)
+
+
+def zoneinfo_serializer(
+    obj: object,
+    options: dict[str, object],
+    ctx: object | None,
+) -> str:
+    '''Encode a ZoneInfo timezone by its IANA key.'''
+    key = cast(ZoneInfo, obj).key
+    if key is None:
+        raise TypeError("ZoneInfo values without a key cannot be serialized")
+    return key
+
+
+def zoneinfo_deserializer(
+    cls: type,
+    data: object,
+    options: dict[str, object],
+    ctx: object | None,
+) -> ZoneInfo:
+    '''Reconstruct a ZoneInfo timezone using its IANA key.'''
+    if not isinstance(data, str):
+        raise TypeError("ZoneInfo data must be a string key")
+    return ZoneInfo(data)
+
+
+register(ZoneInfo, zoneinfo_serializer, zoneinfo_deserializer)
+
+
+def ipaddress_serializer(
+    obj: object,
+    options: dict[str, object],
+    ctx: object | None,
+) -> str:
+    '''Encode an IP address, network, or interface in canonical text form.'''
+    return str(obj)
+
+
+def ipaddress_deserializer(
+    cls: type,
+    data: object,
+    options: dict[str, object],
+    ctx: object | None,
+) -> object:
+    '''Reconstruct an IP address, network, or interface from canonical text.'''
+    if not isinstance(data, str):
+        raise TypeError("IP address data must be a string")
+    return cls(data)
+
+
+for _ip_type in (
+    ipaddress.IPv4Address,
+    ipaddress.IPv6Address,
+    ipaddress.IPv4Network,
+    ipaddress.IPv6Network,
+    ipaddress.IPv4Interface,
+    ipaddress.IPv6Interface,
+):
+    register(_ip_type, ipaddress_serializer, ipaddress_deserializer)
+
+
+def _serialize_pairs(obj: object) -> list[list[object]]:
+    return [[key, value] for key, value in cast(Iterable, obj)]
+
+
+def _deserialize_pairs(data: object, type_name: str) -> list[list[object]]:
+    if not isinstance(data, list) or not all(
+        isinstance(pair, list) and len(pair) == 2 for pair in data
+    ):
+        raise TypeError(f"{type_name} data must be a list of key-value pairs")
+    return data
+
+
+def counter_serializer(
+    obj: object,
+    options: dict[str, object],
+    ctx: object | None,
+) -> list[list[object]]:
+    '''Encode Counter items as pairs so non-string keys are preserved.'''
+    return _serialize_pairs(cast(collections.Counter, obj).items())
+
+
+def counter_deserializer(
+    cls: type,
+    data: object,
+    options: dict[str, object],
+    ctx: object | None,
+) -> collections.Counter:
+    '''Reconstruct a Counter while preserving keys and counts.'''
+    result = cls()
+    for key, count in _deserialize_pairs(data, "Counter"):
+        result[key] = count
+    return result
+
+
+register(collections.Counter, counter_serializer, counter_deserializer)
+
+
+def ordered_dict_serializer(
+    obj: object,
+    options: dict[str, object],
+    ctx: object | None,
+) -> list[list[object]]:
+    '''Encode OrderedDict items as pairs to preserve order and key types.'''
+    return _serialize_pairs(cast(collections.OrderedDict, obj).items())
+
+
+def ordered_dict_deserializer(
+    cls: type,
+    data: object,
+    options: dict[str, object],
+    ctx: object | None,
+) -> collections.OrderedDict:
+    '''Reconstruct an OrderedDict from ordered key-value pairs.'''
+    return cls(_deserialize_pairs(data, "OrderedDict"))
+
+
+register(collections.OrderedDict, ordered_dict_serializer, ordered_dict_deserializer)
+
+
+def deque_serializer(
+    obj: object,
+    options: dict[str, object],
+    ctx: object | None,
+) -> dict[str, object]:
+    '''Encode a deque's elements and optional maximum length.'''
+    value = cast(collections.deque, obj)
+    return {"items": list(value), "maxlen": value.maxlen}
+
+
+def deque_deserializer(
+    cls: type,
+    data: object,
+    options: dict[str, object],
+    ctx: object | None,
+) -> collections.deque:
+    '''Reconstruct a deque with its original maximum length.'''
+    if not isinstance(data, dict):
+        raise TypeError("Deque data must contain items and maxlen")
+    items = data.get("items")
+    maxlen = data.get("maxlen")
+    if (
+        not isinstance(items, list)
+        or (maxlen is not None and (type(maxlen) is not int or maxlen < 0))
+    ):
+        raise TypeError("Deque data must contain items and a non-negative maxlen")
+    return cls(items, maxlen=maxlen)
+
+
+register(collections.deque, deque_serializer, deque_deserializer)

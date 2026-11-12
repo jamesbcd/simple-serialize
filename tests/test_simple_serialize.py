@@ -1,13 +1,17 @@
 import array
+import collections
 import datetime
 import decimal
 import enum
+from fractions import Fraction
+import ipaddress
 import json
 import pathlib
 import re
 import uuid
 from collections.abc import Iterable
 from dataclasses import FrozenInstanceError, dataclass, field
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import pytest
 
@@ -457,6 +461,134 @@ def test_uuid_deserializer_rejects_non_string_data():
     payload = f'{{"{TYPE_KEY}": "UUID", "{DATA_KEY}": 123}}'
 
     with pytest.raises(TypeError, match="UUID data must be a string"):
+        deserialize(payload)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        Fraction(2, 3),
+        Fraction(-12345678901234567890, 9876543210987654321),
+        Fraction(0, 7),
+    ],
+)
+def test_fraction_round_trip_preserves_exact_value(value):
+    result = deserialize(serialize(value))
+
+    assert type(result) is Fraction
+    assert result == value
+
+
+def test_fraction_deserializer_rejects_non_integer_components():
+    payload = f'{{"{TYPE_KEY}": "Fraction", "{DATA_KEY}": {{"numerator": 1.5, "denominator": 2}}}}'
+
+    with pytest.raises(TypeError, match="integer numerator and denominator"):
+        deserialize(payload)
+
+
+def test_fraction_deserializer_rejects_zero_denominator():
+    payload = f'{{"{TYPE_KEY}": "Fraction", "{DATA_KEY}": {{"numerator": 1, "denominator": 0}}}}'
+
+    with pytest.raises(TypeError, match="denominator must not be zero"):
+        deserialize(payload)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        ipaddress.IPv4Address("192.0.2.1"),
+        ipaddress.IPv6Address("2001:db8::1"),
+        ipaddress.IPv4Network("192.0.2.0/24"),
+        ipaddress.IPv6Network("2001:db8::/32"),
+        ipaddress.IPv4Interface("192.0.2.1/24"),
+        ipaddress.IPv6Interface("2001:db8::1/32"),
+    ],
+)
+def test_ipaddress_values_round_trip(value):
+    result = deserialize(serialize(value))
+
+    assert type(result) is type(value)
+    assert result == value
+
+
+def test_fixed_timezone_round_trip_preserves_offset_and_name():
+    value = datetime.timezone(datetime.timedelta(hours=5, minutes=30), "IST")
+
+    result = deserialize(serialize(value))
+
+    assert type(result) is datetime.timezone
+    assert result == value
+    assert result.tzname(None) == "IST"
+
+
+def test_zoned_datetime_round_trip_preserves_fixed_timezone_name():
+    zone = datetime.timezone(datetime.timedelta(hours=5, minutes=30), "IST")
+    value = datetime.datetime(2024, 1, 2, 3, 4, tzinfo=zone)
+
+    result = deserialize(serialize(value))
+
+    assert result.tzinfo == zone
+    assert result.tzname() == "IST"
+
+
+def test_zoned_datetime_round_trip_preserves_zone_and_fold():
+    try:
+        zone = ZoneInfo("America/New_York")
+    except ZoneInfoNotFoundError:
+        pytest.skip("IANA timezone database is unavailable")
+    value = datetime.datetime(2024, 11, 3, 1, 30, tzinfo=zone, fold=1)
+
+    result = deserialize(serialize(value))
+
+    assert type(result) is datetime.datetime
+    assert result.tzinfo.key == "America/New_York"
+    assert result.fold == 1
+    assert result.utcoffset() == value.utcoffset()
+
+
+def test_temporal_deserializer_accepts_legacy_isoformat_string():
+    payload = (
+        f'{{"{TYPE_KEY}": "datetime", '
+        f'"{DATA_KEY}": "2024-01-02T03:04:00+00:00"}}'
+    )
+
+    result = deserialize(payload)
+
+    assert result == datetime.datetime.fromisoformat("2024-01-02T03:04:00+00:00")
+
+
+def test_counter_round_trip_preserves_non_string_keys_and_counts():
+    value = collections.Counter({1: 2, (3, 4): -1})
+
+    result = deserialize(serialize(value))
+
+    assert type(result) is collections.Counter
+    assert result == value
+
+
+def test_ordered_dict_round_trip_preserves_order_and_key_types():
+    value = collections.OrderedDict([(1, "first"), ((2, 3), "second")])
+
+    result = deserialize(serialize(value))
+
+    assert type(result) is collections.OrderedDict
+    assert list(result.items()) == list(value.items())
+
+
+def test_deque_round_trip_preserves_maxlen():
+    value = collections.deque([1, 2, 3], maxlen=4)
+
+    result = deserialize(serialize(value))
+
+    assert type(result) is collections.deque
+    assert result == value
+    assert result.maxlen == value.maxlen
+
+
+def test_deque_deserializer_rejects_invalid_maxlen():
+    payload = f'{{"{TYPE_KEY}": "deque", "{DATA_KEY}": {{"items": [], "maxlen": -1}}}}'
+
+    with pytest.raises(TypeError, match="non-negative maxlen"):
         deserialize(payload)
 
 
