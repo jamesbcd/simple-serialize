@@ -13,7 +13,9 @@ from simple_serialize import (
     _Registry,
     Context,
     deserialize,
+    load,
     register,
+    save,
     serializable,
     serialize,
 )
@@ -71,6 +73,30 @@ def test_custom_serializer_and_deserializer_round_trip():
     result = deserialize(serialize(TestCustom(21)))
 
     assert isinstance(result, TestCustom)
+    assert result.value == 21
+
+
+def test_save_and_load_pass_context_to_custom_callbacks(tmp_path):
+    @serializable("SerializeTestSaveLoadContext")
+    class TestContextual:
+        def __init__(self, value):
+            self.value = value
+
+        def _serialize(self, ctx: Context):
+            return {"value": self.value + ctx.kwargs["offset"]}
+
+        @classmethod
+        def _deserialize(cls, data, ctx: Context):
+            return cls(data["value"] - ctx.kwargs["offset"])
+
+    value = TestContextual(21)
+    ctx = Context(offset=10)
+    path = tmp_path / "context.json"
+
+    save(value, path, ctx)
+    result = load(path, ctx)
+
+    assert isinstance(result, TestContextual)
     assert result.value == 21
 
 

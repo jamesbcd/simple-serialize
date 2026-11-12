@@ -161,7 +161,7 @@ def register(cls: type,
 Pathlike = str | os.PathLike | pathlib.Path
 
 
-def save(obj: object, path: Pathlike) -> None:
+def save(obj: object, path: Pathlike, ctx: Context | None = None) -> None:
     '''Serialize ``obj`` as JSON and write it to ``path``.
 
     Missing parent directories are created. The object's type must be
@@ -170,10 +170,11 @@ def save(obj: object, path: Pathlike) -> None:
     Args:
         obj: Object to serialize.
         path: Destination path.
+        ctx: Optional context passed to serializers.
     '''
     path = pathlib.Path(path)
     pathlib.Path(path).parent.mkdir(parents=True, exist_ok=True)
-    json_str = serialize(obj)
+    json_str = serialize(obj, ctx)
     with path.open('w', encoding='utf-8') as file:
         file.write(json_str)
 
@@ -204,7 +205,7 @@ def serialize(obj: object, ctx: Context | None = None) -> str:
         default=lambda obj: _serialize_handler(obj, ctx),
     )
 
-def load(path: Pathlike) -> object:
+def load(path: Pathlike, ctx: Context | None = None) -> object:
     '''Read JSON from ``path`` and deserialize its value.
 
     Any registered types in the file must already be registered in this
@@ -212,6 +213,7 @@ def load(path: Pathlike) -> object:
 
     Args:
         path: Source path.
+        ctx: Optional context passed to deserializers.
 
     Returns:
         The decoded Python value.
@@ -219,7 +221,7 @@ def load(path: Pathlike) -> object:
     path = pathlib.Path(path)
     with path.open('r', encoding='utf-8') as file:
         json_str = file.read()
-    return deserialize(json_str)
+    return deserialize(json_str, ctx)
 
 def deserialize(json_str: str, ctx: Context | None = None) -> object:
     '''Decode a JSON string into Python values and registered objects.
