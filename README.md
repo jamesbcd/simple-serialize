@@ -71,8 +71,9 @@ restored = load("data/person.json")
 ```
 
 Both operations accept an optional opaque `ctx` value, which is passed to
-custom serialization and deserialization callbacks unchanged. If omitted,
-callbacks receive `None`:
+custom serialization and deserialization callbacks unchanged. Per-class keyword
+options supplied during registration are passed as a dictionary immediately
+before `ctx`. If omitted, callbacks receive `None` for `ctx`:
 
 ```python
 from simple_serialize import deserialize, serialize
@@ -87,30 +88,33 @@ in your own callbacks.
 
 ## Custom serialization
 
-For a decorated class, define `_serialize(self, ctx)` and
-`_deserialize(cls, data, ctx)` to control its JSON data:
+For a decorated class, define `_serialize(self, options, ctx)` and
+`_deserialize(cls, data, options, ctx)` to control its JSON data. Decorator
+keyword arguments become the `options` dictionary:
 
 ```python
 from simple_serialize import serializable
 
 
-@serializable
+@serializable(scale=1.8)
 class Temperature:
     def __init__(self, celsius):
         self.celsius = celsius
 
-    def _serialize(self, ctx):
-        return {"fahrenheit": self.celsius * 9 / 5 + 32}
+    def _serialize(self, options, ctx):
+        return {"fahrenheit": self.celsius * options["scale"] + 32}
 
     @classmethod
-    def _deserialize(cls, data, ctx):
-        return cls((data["fahrenheit"] - 32) * 5 / 9)
+    def _deserialize(cls, data, options, ctx):
+        return cls((data["fahrenheit"] - 32) / options["scale"])
 ```
 
 Alternatively, use `register` for a class you cannot modify. The serializer
-receives the instance and context; the deserializer receives the class,
-decoded data, and context. The callbacks should return JSON-compatible data
-or a reconstructed instance, respectively.
+receives the instance, options dictionary, and context; the deserializer
+receives the class, decoded data, options dictionary, and context. The
+callbacks should return JSON-compatible data or a reconstructed instance,
+respectively. Additional keyword arguments to `register` become the options
+dictionary; `json_name` continues to select the JSON type name.
 
 ```python
 from simple_serialize import register
@@ -121,11 +125,11 @@ class ExternalValue:
         self.value = value
 
 
-def serialize_external(obj: ExternalValue, ctx):
+def serialize_external(obj: ExternalValue, options, ctx):
     return {"value": obj.value}
 
 
-def deserialize_external(cls, data, ctx):
+def deserialize_external(cls, data, options, ctx):
     return cls(data["value"])
 
 
@@ -134,6 +138,7 @@ register(
     serialize_external,
     deserialize_external,
     json_name="ExternalValue",
+    units="meters",
 )
 ```
 

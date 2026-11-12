@@ -37,28 +37,31 @@ TYPE_KEY = "__type__"
 DATA_KEY = "__data__"
 
 
-# Type aliases for serializer and deserializer callables
-# Serializer takes an object and optional opaque context and returns JSON data.
-# Deserializer takes a class, JSON data, and optional opaque context.
-Serializer = Callable[[object, object | None], object]
-Deserializer = Callable[[type, object, object | None], object]
+# Type aliases for serializer and deserializer callables.
+# Options are registration-specific; context is supplied by the caller.
+Serializer = Callable[[object, dict[str, object], object | None], object]
+Deserializer = Callable[[type, object, dict[str, object], object | None], object]
 
 
 class _Registry:
     '''Map Python classes and JSON type names to serialization callbacks.
 
     Attributes:
-        _serializers: Class-to-(JSON name, serializer) lookup table.
-        _deserializers: JSON-name-to-(class, deserializer) lookup table.
+        _serializers: Class-to-(JSON name, serializer, options) lookup table.
+        _deserializers: JSON-name-to-(class, deserializer, options) lookup table.
     '''
 
     def __init__(self):
         '''Initialize empty serializer and deserializer lookup tables.'''
         # Keep each class and JSON name unique in its respective lookup table.
-        self._serializers: dict[type, tuple[str, Serializer]] = {}
-        self._deserializers: dict[str, tuple[type, Deserializer]] = {}
+        self._serializers: dict[type, tuple[str, Serializer, dict[str, object]]] = {}
+        self._deserializers: dict[
+            str, tuple[type, Deserializer, dict[str, object]]
+        ] = {}
 
-    def serializer_for(self, obj: object) -> tuple[str, Serializer] | None:
+    def serializer_for(
+        self, obj: object
+    ) -> tuple[str, Serializer, dict[str, object]] | None:
         '''Find a registered serializer applicable to ``obj``.
 
         Lookup prefers the exact runtime type, then registered base classes in
@@ -69,8 +72,8 @@ class _Registry:
             obj: Object whose serializer is requested.
 
         Returns:
-            The registered JSON type name and serializer, or ``None`` if no
-            registration applies.
+            The registered JSON type name, serializer, and options, or
+            ``None`` if no registration applies.
         '''
         obj_type = type(obj)
         registered = self._serializers.get(obj_type)
@@ -92,14 +95,18 @@ class _Registry:
     def register(self, cls: type,
                  serializer: Serializer,
                  deserializer: Deserializer,
-                 json_name: str | None = None):
+                 json_name: str | None = None,
+                 **options: object) -> None:
         '''Add a class and its callbacks to the registry.
 
         Args:
             cls: Python class handled by the callbacks.
-            serializer: Converts an instance and context into serializable data.
-            deserializer: Reconstructs an instance from the class, data, and context.
+            serializer: Converts an instance, options, and context into
+                serializable data.
+            deserializer: Reconstructs an instance from the class, data,
+                options, and context.
             json_name: Type name stored in JSON; defaults to ``cls.__name__``.
+            **options: Registration-specific options passed to both callbacks.
 
         Raises:
             TypeError: If either callback is not callable.
@@ -115,8 +122,9 @@ class _Registry:
             raise ValueError(f"Class {cls.__name__} is already registered")
         if json_name in self._deserializers:
             raise ValueError(f"JSON name {json_name} is already registered")
-        self._serializers[cls] = (json_name, serializer)
-        self._deserializers[json_name] = (cls, deserializer)
+        class_options = dict(options)
+        self._serializers[cls] = (json_name, serializer, class_options)
+        self._deserializers[json_name] = (cls, deserializer, class_options)
 
 _registry = _Registry()
 
@@ -126,7 +134,8 @@ _registry = _Registry()
 def register(cls: type,
              serializer: Serializer,
              deserializer: Deserializer,
-             json_name: str | None = None) -> None:
+             json_name: str | None = None,
+             **options: object) -> None:
     '''Register a class with custom serialization callbacks.
 
     Use this function for classes that cannot be modified to add
@@ -134,18 +143,19 @@ def register(cls: type,
 
     Args:
         cls: The Python class to register.
-        serializer: Callable receiving an instance and optional opaque context, and
-            returning data that can be encoded as JSON.
-        deserializer: Callable receiving the class, decoded data, and context,
-            and returning an instance.
+        serializer: Callable receiving an instance, options dictionary, and
+            optional context, and returning data that can be encoded as JSON.
+        deserializer: Callable receiving the class, decoded data, options
+            dictionary, and context, and returning an instance.
         json_name: Optional type name stored in the JSON representation.
             Defaults to the class name.
+        **options: Registration-specific keyword options passed to both callbacks.
 
     Raises:
         TypeError: If either callback is not callable.
         ValueError: If the class or JSON type name is already registered.
     '''
-    _registry.register(cls, serializer, deserializer, json_name)
+    _registry.register(cls, serializer, deserializer, json_name, **options)
 
 
 # Accepted path values for :func:`save`.
@@ -316,6 +326,7 @@ def _serialize_handler(obj: object, ctx: object | None):
 
     Args:
         obj: Registered object to encode.
+        options: Registration-specific options passed to its serializer.
         ctx: Opaque object passed to its serializer.
 
     Returns:
@@ -327,10 +338,10 @@ def _serialize_handler(obj: object, ctx: object | None):
     registered = _registry.serializer_for(obj)
     if registered is None:
         raise TypeError(f"Object of type {type(obj).__name__} is not registered as serializable")
-    json_name, serializer = registered
+    json_name, serializer, options = registered
     return {
         TYPE_KEY: json_name,
-        DATA_KEY: serializer(obj, ctx)
+        DATA_KEY: serializer(obj, options, ctx)
     }
 
 def _deserialize_handler(input_dict: dict, ctx: object | None) -> object:
@@ -342,6 +353,7 @@ def _deserialize_handler(input_dict: dict, ctx: object | None) -> object:
 
     Args:
         input_dict: A decoded JSON object.
+        options: Registration-specific options passed to its deserializer.
         ctx: Opaque object passed to registered deserializers.
 
     Returns:
@@ -354,13 +366,14 @@ def _deserialize_handler(input_dict: dict, ctx: object | None) -> object:
         # This is a regular dictionary, so return it as-is.
         return input_dict
     json_name = input_dict[TYPE_KEY]
-    (cls, deserializer) = _registry._deserializers.get(json_name, (object, None))
-    if deserializer is None:
+    registered = _registry._deserializers.get(json_name)
+    if registered is None:
         raise TypeError(f"No deserializer registered for JSON type {json_name}")
+    cls, deserializer, options = registered
     if DATA_KEY not in input_dict:
         raise TypeError(f"No {DATA_KEY} key found for JSON type {json_name}")
     data = input_dict[DATA_KEY]
-    return deserializer(cls, data, ctx)
+    return deserializer(cls, data, options, ctx)
 
 #
 # Decorator for easiest way to register serializable classes
@@ -378,70 +391,82 @@ def serializable(cls_or_json_name: T) -> T:
     '''Type signature for decorating a class directly.'''
     ...
 
-# Case 2: Used with a custom JSON name, e.g., @serializable("my_name")
-# This returns a factory function that takes the class and returns it unchanged.
 @overload
-def serializable(cls_or_json_name: str, *args: Any, **kwargs: Any) -> Callable[[T], T]:
-    '''Type signature for creating a decorator with a custom JSON name.'''
+def serializable(
+    cls_or_json_name: str | None = None, **options: object
+) -> Callable[[T], T]:
+    '''Type signature for creating a decorator with registration options.'''
     ...
 
-def serializable(cls_or_json_name: type | str, *args, **kwargs) -> Any:
+def serializable(
+    cls_or_json_name: type | str | None = None,
+    *args: Any,
+    **options: object,
+) -> Any:
     '''Decorator to register a class as serializable.
 
-    Use as ``@serializable`` or ``@serializable("CustomName")``. The class
-    remains unchanged after registration. Unless it provides custom callbacks,
-    enums use enum-specific handling, dataclasses use field-based handling,
-    and other classes use their instance attributes, including ``__dict__``
-    entries and ``__slots__``.
+    Use as ``@serializable``, ``@serializable("CustomName")``, or
+    ``@serializable(option=value)``. Keyword options are passed to both
+    callbacks before the context argument. The class remains unchanged after
+    registration. Unless it provides custom callbacks, enums use enum-specific
+    handling, dataclasses use field-based handling, and other classes use their
+    instance attributes, including ``__dict__`` entries and ``__slots__``.
 
     A decorated class can customize serialization by implementing:
 
-        def _serialize(self, ctx: object | None) -> object:
+        def _serialize(
+            self, options: dict[str, object], ctx: object | None
+        ) -> object:
             # Return data that can be encoded as JSON.
     
         @classmethod
-        def _deserialize(cls, data: object, ctx: object | None) -> object:
+        def _deserialize(
+            cls, data: object, options: dict[str, object], ctx: object | None
+        ) -> object:
             # Reconstruct and return an instance from the decoded data.
 
     Args:
-        cls_or_json_name: The class to decorate, or a custom JSON type name
-            when used as a decorator factory.
+        cls_or_json_name: The class to decorate, or an optional custom JSON type
+            name when used as a decorator factory.
         *args: Accepted for decorator-call compatibility; not interpreted.
-        **kwargs: Accepted for decorator-call compatibility; not interpreted.
+        **options: Registration-specific keyword options. ``json_name`` may be
+            used to set the JSON type name when decorating.
 
     Returns:
-        The decorated class, or a decorator when given a JSON type name.
+        The decorated class, or a decorator when given options.
 
     Raises:
-        TypeError: If a class's custom serializer or deserializer is not callable.
+        TypeError: If a class's custom serializer or deserializer is not callable,
+            or if ``json_name`` is invalid.
         ValueError: If the class or JSON type name is already registered.
     '''
-    if isinstance(cls_or_json_name, str):
-        # Decorator was called with a custom JSON name e.g. @serializable("CustomName")
-        # We have to return a wrapper function that will be called with the class itself
-        json_name = cls_or_json_name
-        def wrapper(cls: type) -> type:
-            '''Register ``cls`` under the selected JSON type name and return it.'''
-            serializer, deserializer = _get_serializers_for_decorated_class(cls)
-            _registry.register(cls, serializer, deserializer, json_name)
-            # We leave the underlying class unchanged
-            return cls
-        return wrapper
-    else:
-        # Decorator was used without arguments e.g. @serializable
-        # So this function itself does the decoratorating
-        cls = cls_or_json_name
+    json_name = cls_or_json_name if isinstance(cls_or_json_name, str) else None
+    keyword_json_name = options.pop("json_name", None)
+    if keyword_json_name is not None:
+        if json_name is not None:
+            raise TypeError("json_name cannot be specified both positionally and by keyword")
+        if not isinstance(keyword_json_name, str):
+            raise TypeError("json_name must be a string")
+        json_name = keyword_json_name
+
+    def wrapper(cls: type) -> type:
+        '''Register ``cls`` and return it unchanged.'''
         serializer, deserializer = _get_serializers_for_decorated_class(cls)
-        _registry.register(cls, serializer, deserializer, cls.__name__)
+        _registry.register(cls, serializer, deserializer, json_name, **options)
         return cls
+
+    if isinstance(cls_or_json_name, type):
+        return wrapper(cls_or_json_name)
+    return wrapper
 
 def _get_serializers_for_decorated_class(cls: type) -> tuple[Serializer, Deserializer]:
     '''Select custom or default callbacks for a decorated class.
 
     Callback selection prefers the class's ``_serialize`` or ``_deserialize``
     method. Otherwise enums, dataclasses, and ordinary classes use their
-    respective built-in implementations. A classmethod deserializer is
-    unbound so registration can invoke it with the class as its first argument.
+    respective built-in implementations.     A classmethod deserializer is unbound so registration can invoke it with
+    the class as its first argument. Both custom methods receive options before
+    context.
 
     Args:
         cls: Class being registered.
@@ -502,7 +527,7 @@ def _get_slot_names(cls: type) -> set[str]:
     return names
 
 
-def standard_serializer(obj: object, ctx: object | None) -> dict:
+def standard_serializer(obj: object, options: dict[str, object], ctx: object | None) -> dict:
     '''Copy an ordinary object's instance attributes into a dictionary.
 
     Args:
@@ -529,7 +554,7 @@ def standard_serializer(obj: object, ctx: object | None) -> dict:
         ) from e
     return new_obj
 
-def standard_deserializer(cls: type, data: object, ctx: object | None) -> object:
+def standard_deserializer(cls: type, data: object, options: dict[str, object], ctx: object | None) -> object:
     '''Construct an ordinary class and restore its instance attributes.
 
     The class must be constructible without arguments. The decoded data is
@@ -569,7 +594,7 @@ def standard_deserializer(cls: type, data: object, ctx: object | None) -> object
         ) from e
     return instance
 
-def iterable_serializer(obj: object, ctx: object | None) -> list:
+def iterable_serializer(obj: object, options: dict[str, object], ctx: object | None) -> list:
     '''Convert an iterable value to a list for JSON encoding.
 
     Args:
@@ -584,7 +609,7 @@ def iterable_serializer(obj: object, ctx: object | None) -> list:
     return list(obj)
 
 
-def iterable_deserializer(cls: type, data: object, ctx: object | None) -> Iterable:
+def iterable_deserializer(cls: type, data: object, options: dict[str, object], ctx: object | None) -> Iterable:
     '''Reconstruct a registered iterable class from decoded list data.
 
     Args:
@@ -606,7 +631,7 @@ register(set, iterable_serializer, iterable_deserializer)
 register(frozenset, iterable_serializer, iterable_deserializer)
 
 
-def mapping_serializer(obj: object, ctx: object | None) -> dict:
+def mapping_serializer(obj: object, options: dict[str, object], ctx: object | None) -> dict:
     '''Return a shallow dictionary copy of a mapping.
 
     Args:
@@ -620,7 +645,7 @@ def mapping_serializer(obj: object, ctx: object | None) -> dict:
     return dict(obj)
 
 
-def mapping_deserializer(cls: type, data: object, ctx: object | None) -> object:
+def mapping_deserializer(cls: type, data: object, options: dict[str, object], ctx: object | None) -> object:
     '''Construct a mapping class from decoded dictionary data.
 
     Args:
@@ -635,7 +660,7 @@ def mapping_deserializer(cls: type, data: object, ctx: object | None) -> object:
     return cls(data)
 
 
-def dataclass_serializer(obj: object, ctx: object | None) -> dict:
+def dataclass_serializer(obj: object, options: dict[str, object], ctx: object | None) -> dict:
     '''Serialize a dataclass instance as a field-name/value dictionary.
 
     Args:
@@ -653,7 +678,7 @@ def dataclass_serializer(obj: object, ctx: object | None) -> dict:
     return {field.name: getattr(obj, field.name) for field in fields(obj)}
 
 
-def dataclass_deserializer(cls: type, data: object, ctx: object | None) -> object:
+def dataclass_deserializer(cls: type, data: object, options: dict[str, object], ctx: object | None) -> object:
     '''Reconstruct a dataclass by passing decoded fields to its constructor.
 
     Constructor-based reconstruction also supports frozen dataclasses without
@@ -705,7 +730,7 @@ def dataclass_deserializer(cls: type, data: object, ctx: object | None) -> objec
 # We don't register a general enum serializer/deserializer here, because Enums are almost
 # always subclasses, and it's better to register the subclasses.
 
-def enum_serializer(obj: object, ctx: object | None) -> dict:
+def enum_serializer(obj: object, options: dict[str, object], ctx: object | None) -> dict:
     '''Represent an enum member by its underlying value.
 
     Args:
@@ -720,7 +745,7 @@ def enum_serializer(obj: object, ctx: object | None) -> dict:
         "value": obj.value
     }
 
-def enum_deserializer(cls: type, data: object, ctx: object | None) -> enum.Enum:
+def enum_deserializer(cls: type, data: object, options: dict[str, object], ctx: object | None) -> enum.Enum:
     '''Reconstruct an enum member from its underlying value.
 
     Args:
@@ -736,7 +761,7 @@ def enum_deserializer(cls: type, data: object, ctx: object | None) -> enum.Enum:
 
 # Bytes serializers and deserializers
 
-def bytes_serializer(obj: object, ctx: object | None) -> dict:
+def bytes_serializer(obj: object, options: dict[str, object], ctx: object | None) -> dict:
     '''Encode bytes as validated, ASCII base64 text.
 
     Args:
@@ -752,7 +777,7 @@ def bytes_serializer(obj: object, ctx: object | None) -> dict:
         "value": base64.b64encode(obj).decode("ascii"),
     }
 
-def bytes_deserializer(cls: type, data: object, ctx: object | None) -> bytes:
+def bytes_deserializer(cls: type, data: object, options: dict[str, object], ctx: object | None) -> bytes:
     '''Decode the base64 representation produced by :func:`bytes_serializer`.
 
     Args:
@@ -776,7 +801,7 @@ register(bytes, bytes_serializer, bytes_deserializer)
 
 # Path serializers and deserializers
 
-def path_serializer(obj: object, ctx: object | None) -> str:
+def path_serializer(obj: object, options: dict[str, object], ctx: object | None) -> str:
     '''Encode a path using POSIX separators.
 
     Args:
@@ -790,7 +815,7 @@ def path_serializer(obj: object, ctx: object | None) -> str:
     return obj.as_posix()
 
 
-def path_deserializer(cls: type, data: object, ctx: object | None) -> pathlib.Path:
+def path_deserializer(cls: type, data: object, options: dict[str, object], ctx: object | None) -> pathlib.Path:
     '''Reconstruct a platform-native path from a serialized path string.
 
     The value is first interpreted as a Windows path and normalized to POSIX
@@ -813,7 +838,7 @@ register(pathlib.Path, path_serializer, path_deserializer)
 
 # Datetime serializers and deserializers
 
-def isoformat_serializer(obj: object, ctx: object | None) -> str:
+def isoformat_serializer(obj: object, options: dict[str, object], ctx: object | None) -> str:
     '''Encode a date, time, or datetime using its ISO 8601 representation.
 
     Args:
@@ -827,7 +852,7 @@ def isoformat_serializer(obj: object, ctx: object | None) -> str:
     return obj.isoformat()
 
 
-def isoformat_deserializer(cls: type, data: object,
+def isoformat_deserializer(cls: type, data: object, options: dict[str, object],
                            ctx: object | None) -> datetime.datetime | datetime.date | datetime.time:
     '''Reconstruct a registered temporal type from ISO 8601 text.
 
@@ -847,7 +872,7 @@ register(datetime.date,     cast(Serializer, isoformat_serializer), cast(Deseria
 register(datetime.time,     cast(Serializer, isoformat_serializer), cast(Deserializer, isoformat_deserializer))
 
 
-def timedelta_serializer(obj: object, ctx: object | None) -> dict[str, int]:
+def timedelta_serializer(obj: object, options: dict[str, object], ctx: object | None) -> dict[str, int]:
     '''Encode a duration as exact integer day, second, and microsecond components.
 
     Args:
@@ -865,7 +890,7 @@ def timedelta_serializer(obj: object, ctx: object | None) -> dict[str, int]:
     }
 
 
-def timedelta_deserializer(cls: type, data: object, ctx: object | None) -> datetime.timedelta:
+def timedelta_deserializer(cls: type, data: object, options: dict[str, object], ctx: object | None) -> datetime.timedelta:
     '''Reconstruct a duration from exact integer components. (Storing a floating-point
     number of seconds can fail to preserve the correct number of microseconds.)
 
@@ -891,7 +916,7 @@ register(datetime.timedelta, timedelta_serializer, timedelta_deserializer)
 
 # Regex serializers and deserializers
 
-def regex_serializer(obj: object, ctx: object | None) -> dict:
+def regex_serializer(obj: object, options: dict[str, object], ctx: object | None) -> dict:
     '''Encode a compiled regular expression's pattern and flags.
 
     Byte patterns use the same base64 representation as bytes values; string
@@ -907,13 +932,13 @@ def regex_serializer(obj: object, ctx: object | None) -> dict:
     obj = cast(re.Pattern, obj)
     pattern = obj.pattern
     if isinstance(pattern, bytes):
-        pattern = bytes_serializer(pattern, ctx)
+        pattern = bytes_serializer(pattern, options, ctx)
     return {
         "pattern": pattern,
         "flags": obj.flags
     }
 
-def regex_deserializer(cls: type, data: object, ctx: object | None) -> re.Pattern:
+def regex_deserializer(cls: type, data: object, options: dict[str, object], ctx: object | None) -> re.Pattern:
     '''Recompile a regular expression from its stored pattern and flags.
 
     Args:
@@ -927,7 +952,7 @@ def regex_deserializer(cls: type, data: object, ctx: object | None) -> re.Patter
     data = cast(dict, data)
     pattern = data["pattern"]
     if isinstance(pattern, dict):
-        pattern = bytes_deserializer(bytes, pattern, ctx)
+        pattern = bytes_deserializer(bytes, pattern, options, ctx)
     flags = data["flags"]
     return re.compile(pattern, flags)
 

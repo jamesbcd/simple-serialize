@@ -67,7 +67,7 @@ def test_standard_serializer_preserves_original_exception_as_cause():
             return super().__getattribute__(name)
 
     with pytest.raises(TypeError, match="Failed to serialize") as exc_info:
-        standard_serializer(BrokenObject(), None)
+        standard_serializer(BrokenObject(), {}, None)
 
     assert isinstance(exc_info.value.__cause__, ValueError)
     assert str(exc_info.value.__cause__) == "attribute access failed"
@@ -79,7 +79,7 @@ def test_standard_deserializer_preserves_original_exception_as_cause():
             raise ValueError("construction failed")
 
     with pytest.raises(TypeError, match="Failed to deserialize") as exc_info:
-        standard_deserializer(BrokenObject, {}, None)
+        standard_deserializer(BrokenObject, {}, {}, None)
 
     assert isinstance(exc_info.value.__cause__, ValueError)
     assert str(exc_info.value.__cause__) == "construction failed"
@@ -94,7 +94,7 @@ def test_dataclass_deserializer_preserves_original_exception_as_cause():
             raise ValueError("post-init failed")
 
     with pytest.raises(TypeError, match="Failed to deserialize") as exc_info:
-        dataclass_deserializer(BrokenDataclass, {"value": 1}, None)
+        dataclass_deserializer(BrokenDataclass, {"value": 1}, {}, None)
 
     assert isinstance(exc_info.value.__cause__, ValueError)
     assert str(exc_info.value.__cause__) == "post-init failed"
@@ -106,12 +106,14 @@ def test_custom_serializer_and_deserializer_round_trip():
         def __init__(self, value=0):
             self.value = value
 
-        def _serialize(self, ctx):
+        def _serialize(self, options, ctx):
+            assert options == {}
             assert ctx is None
             return {"value": self.value * 2}
 
         @classmethod
-        def _deserialize(cls, data, ctx):
+        def _deserialize(cls, data, options, ctx):
+            assert options == {}
             assert ctx is None
             return cls(data["value"] // 2)
 
@@ -127,12 +129,14 @@ def test_save_and_load_pass_context_to_custom_callbacks(tmp_path):
         def __init__(self, value):
             self.value = value
 
-        def _serialize(self, ctx):
+        def _serialize(self, options, ctx):
+            assert options == {}
             assert ctx is supplied_ctx
             return {"value": self.value + ctx["offset"]}
 
         @classmethod
-        def _deserialize(cls, data, ctx):
+        def _deserialize(cls, data, options, ctx):
+            assert options == {}
             assert ctx is supplied_ctx
             return cls(data["value"] - ctx["offset"])
 
@@ -147,6 +151,83 @@ def test_save_and_load_pass_context_to_custom_callbacks(tmp_path):
     assert result.value == 21
 
 
+def test_decorator_options_are_passed_before_context():
+    expected_options = {"multiplier": 2, "label": "configured"}
+
+    @serializable("SerializeTestDecoratorOptions", **expected_options)
+    class TestConfigured:
+        def __init__(self, value):
+            self.value = value
+
+        def _serialize(self, options, ctx):
+            assert options == expected_options
+            assert ctx == "context"
+            return {"value": self.value * options["multiplier"]}
+
+        @classmethod
+        def _deserialize(cls, data, options, ctx):
+            assert options == expected_options
+            assert ctx == "context"
+            return cls(data["value"] // options["multiplier"])
+
+    result = deserialize(serialize(TestConfigured(21), "context"), "context")
+
+    assert isinstance(result, TestConfigured)
+    assert result.value == 21
+
+
+def test_decorator_options_work_without_explicit_json_name():
+    @serializable(multiplier=3)
+    class TestConfigured:
+        def __init__(self, value):
+            self.value = value
+
+        def _serialize(self, options, ctx):
+            return {"value": self.value * options["multiplier"]}
+
+        @classmethod
+        def _deserialize(cls, data, options, ctx):
+            return cls(data["value"] // options["multiplier"])
+
+    result = deserialize(serialize(TestConfigured(14)))
+
+    assert isinstance(result, TestConfigured)
+    assert result.value == 14
+
+
+def test_register_options_are_passed_before_context():
+    class ExternalValue:
+        def __init__(self, value):
+            self.value = value
+
+    expected_options = {"offset": 5}
+
+    def serializer(obj, options, ctx):
+        assert options == expected_options
+        assert ctx == "context"
+        return {"value": obj.value + options["offset"]}
+
+    def deserializer(cls, data, options, ctx):
+        assert options == expected_options
+        assert ctx == "context"
+        return cls(data["value"] - options["offset"])
+
+    register(
+        ExternalValue,
+        serializer,
+        deserializer,
+        json_name="SerializeTestRegisterOptions",
+        **expected_options,
+    )
+    result = deserialize(
+        serialize(ExternalValue(21), "context"),
+        "context",
+    )
+
+    assert isinstance(result, ExternalValue)
+    assert result.value == 21
+
+
 def test_registered_subclass_takes_priority_over_registered_base():
     registry = _Registry()
 
@@ -156,8 +237,15 @@ def test_registered_subclass_takes_priority_over_registered_base():
     class Child(Base):
         pass
 
-    registry.register(Base, lambda obj: "base", lambda cls, data: data, "Base")
-    registry.register(Child, lambda obj: "child", lambda cls, data: data, "Child")
+    registry.register(
+        Base, lambda obj, options, ctx: "base",
+        lambda cls, data, options, ctx: data, "Base",
+        inherited_option=True,
+    )
+    registry.register(
+        Child, lambda obj, options, ctx: "child",
+        lambda cls, data, options, ctx: data, "Child",
+    )
 
     assert registry.serializer_for(Child())[0] == "Child"
 
@@ -171,9 +259,16 @@ def test_registered_mro_base_is_used_for_unregistered_subclass():
     class Child(Base):
         pass
 
-    registry.register(Base, lambda obj, ctx: "base", lambda cls, data, ctx: data, "Base")
+    registry.register(
+        Base,
+        lambda obj, options, ctx: "base",
+        lambda cls, data, options, ctx: data,
+        "Base",
+        inherited_option=True,
+    )
 
     assert registry.serializer_for(Child())[0] == "Base"
+    assert registry.serializer_for(Child())[2] == {"inherited_option": True}
 
 
 def test_virtual_abc_registration_is_used_as_fallback():
@@ -185,8 +280,8 @@ def test_virtual_abc_registration_is_used_as_fallback():
 
     registry.register(
         Iterable,
-        lambda obj, ctx: "iterable",
-        lambda cls, data, ctx: data,
+        lambda obj, options, ctx: "iterable",
+        lambda cls, data, options, ctx: data,
         "Iterable",
     )
 
@@ -202,8 +297,8 @@ def test_duplicate_class_and_json_name_registration_is_rejected():
     class Second:
         pass
 
-    serializer = lambda obj, ctx: None
-    deserializer = lambda cls, data, ctx: None
+    serializer = lambda obj, options, ctx: None
+    deserializer = lambda cls, data, options, ctx: None
     registry.register(First, serializer, deserializer, "First")
 
     with pytest.raises(ValueError, match="already registered"):
@@ -405,11 +500,11 @@ def test_nested_registered_values_round_trip():
 def test_none_data_round_trips():
     @serializable("SerializeTestNone")
     class TestNone:
-        def _serialize(self, ctx):
+        def _serialize(self, options, ctx):
             return None
 
         @classmethod
-        def _deserialize(cls, data, ctx):
+        def _deserialize(cls, data, options, ctx):
             assert data is None
             return cls
 
