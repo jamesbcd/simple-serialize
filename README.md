@@ -1,9 +1,10 @@
 # simple-serialize
 
-`simple-serialize` is a small Python library for serializing Python values and
-registered objects to and from JSON. Register a class with the `@serializable`
-decorator or `register` function, then use `serialize`/`deserialize` for JSON
-strings or `save`/`load` for files.
+`simple-serialize` is a small Python library for serializing Python objects
+to and from JSON. Classes must be registered to be serialized, either by using
+the `@serializable` decorator (simplest), or the `register` function (for types
+you don't control). Use `serialize`/`deserialize` for converting to and from
+JSON strings, or `save`/`load` for writing and reading those strings to disk.
 
 Requires Python 3.10 or later.
 
@@ -17,8 +18,7 @@ python -m pip install .
 
 ## Quick start
 
-Decorate a class to make it serializable. Dataclasses are serialized by field;
-ordinary classes are serialized from their instance attributes.
+Decorate a class to make it serializable. Ordinary classes are serialized from their instance attributes. Dataclasses are serialized from their fields.
 
 ```python
 from dataclasses import dataclass
@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from simple_serialize import deserialize, serializable, serialize
 
 
-@serializable("Person")
+@serializable
 @dataclass
 class Person:
     name: str
@@ -41,7 +41,7 @@ restored = deserialize(json_text)
 assert restored == person
 ```
 
-Registered objects are represented in JSON by a type name and serialized data:
+Registered objects are represented in JSON by a type name and serialized data.
 
 ```json
 {
@@ -53,9 +53,44 @@ Registered objects are represented in JSON by a type name and serialized data:
 }
 ```
 
+Passing a string argument to @serializable will use that string instead of the class name
+as the value of the `__type__` key. Use an explicit name when the JSON type name should remain stable if the Python class is renamed.
+
+For a class you can't decorate, use the `register` function, and supply serializer 
+and deserializer functions. For example:
+
+```python
+from simple_serialize import register
+
+
+class ExternalValue: # Some externally defined class you don't control
+    def __init__(self, value):
+        self.value = value
+
+# Functions you define to handle serialization and deserialization
+
+def serialize_external(obj: ExternalValue, options, ctx):
+    return {"value": obj.value}
+
+def deserialize_external(cls, data, options, ctx):
+    return cls(data["value"])
+
+# Register the class and its handler functions
+
+register(
+    ExternalValue,
+    serialize_external,
+    deserialize_external,
+    json_name="ExternalValue",
+    units="meters",
+)
+```
+
 The class must be registered in the current Python process before its serialized
-value can be deserialized. Use an explicit name such as `"Person"` when the JSON
-type name should remain stable if the Python class is renamed.
+value can be deserialized.
+
+Serializer callbacks receive the instance, options dictionary, and an opaque context
+context object (see below). They should return JSON-compatible data. Deserializers receive the class, decoded data, options dictionary, and context object. They should return a reconstructed instance. Additional keyword arguments to `register` become the options dictionary; `json_name` continues to select the JSON type name.
 
 ## JSON strings and files
 
@@ -71,9 +106,7 @@ restored = load("data/person.json")
 ```
 
 Both operations accept an optional opaque `ctx` value, which is passed to
-custom serialization and deserialization callbacks unchanged. Per-class keyword
-options supplied during registration are passed as a dictionary immediately
-before `ctx`. If omitted, callbacks receive `None` for `ctx`:
+custom serialization and deserialization callbacks unchanged. 
 
 ```python
 from simple_serialize import deserialize, serialize
@@ -88,17 +121,17 @@ in your own callbacks.
 
 ## Registration options
 
-The default serializers for ordinary classes and dataclasses recognize three
-registration options:
+Keyword arguments passed to `@serializable` or `register` are collected into
+an `options` dictionary passed to the serializer and deserializer. The default serializers for ordinary classes and dataclasses recognize three keywords:
 
 - `exclude`: a list of attribute or field names omitted from serialized data.
 - `select`: a list of the only attribute or field names to serialize (overrides
   `exclude`).
 - `rename`: a mapping from Python attribute or field names to JSON names.
-  Renamed names are mapped back during deserialization.
+  Renamed names are mapped back during deserialization. Attribute names not in this
+  mapping remain unchanged.
 
-Names in `select` and `exclude` refer to Python attribute or field names, before
-any renaming. For example:
+For example:
 
 ```python
 @serializable(
@@ -111,20 +144,17 @@ class Account:
     password: str
 ```
 
-An excluded or unselected value is not present in the JSON data. It therefore
-needs a suitable default or otherwise compatible constructor if the object is
-to be deserialized. Custom serialization callbacks receive these options in
-their options dictionary and remain responsible for applying them.
-The exported `mapping_serializer` and `mapping_deserializer` callbacks apply
-them to mapping keys when you register those callbacks for a mapping class.
-Native dictionaries are serialized as ordinary JSON objects and are not
-filtered or renamed.
+Names in `select` and `exclude` refer to Python attribute or field names, before
+any renaming. An excluded or unselected value is not present in the JSON data. It therefore needs a suitable default or otherwise compatible constructor if the object is
+to be deserialized.
+
+Custom serialization callbacks receive these options in their options dictionary and remain responsible for applying them. The exported `mapping_serializer` and `mapping_deserializer` callbacks apply them to mapping keys when you register those callbacks for a mapping class. Native dictionaries are serialized as ordinary JSON objects and are not filtered or renamed.
 
 ## Custom serialization
 
 For a decorated class, define `_serialize(self, options, ctx)` and
-`_deserialize(cls, data, options, ctx)` to control its JSON data. Decorator
-keyword arguments become the `options` dictionary:
+`_deserialize(cls, data, options, ctx)` methods to define custom conversions to
+and from JSON. Decorator keyword arguments are available in the `options` dictionary:
 
 ```python
 from simple_serialize import serializable
@@ -143,47 +173,14 @@ class Temperature:
         return cls((data["fahrenheit"] - 32) / options["scale"])
 ```
 
-Alternatively, use `register` for a class you cannot modify. The serializer
-receives the instance, options dictionary, and context; the deserializer
-receives the class, decoded data, options dictionary, and context. The
-callbacks should return JSON-compatible data or a reconstructed instance,
-respectively. Additional keyword arguments to `register` become the options
-dictionary; `json_name` continues to select the JSON type name.
-
-```python
-from simple_serialize import register
-
-
-class ExternalValue:
-    def __init__(self, value):
-        self.value = value
-
-
-def serialize_external(obj: ExternalValue, options, ctx):
-    return {"value": obj.value}
-
-
-def deserialize_external(cls, data, options, ctx):
-    return cls(data["value"])
-
-
-register(
-    ExternalValue,
-    serialize_external,
-    deserialize_external,
-    json_name="ExternalValue",
-    units="meters",
-)
-```
-
-If custom callbacks are omitted, enums use their member values, dataclasses use
+If thse custom methods are omitted, enums use their member values, dataclasses use
 their fields, and other classes use their instance attributes, including
 initialized `__slots__`. The default deserializer for an ordinary class calls
 its constructor without arguments, so such classes must support `Class()`.
 
-## Supported values
+## Supported types
 
-JSON-native values (`None`, booleans, numbers, strings, lists, and dictionaries)
+JSON-native types (`None`, booleans, numbers, strings, lists, and dictionaries)
 can be serialized directly. The library also has built-in handlers for:
 
 - `tuple`, `set`, and `frozenset` (encoded as JSON arrays; set iteration order

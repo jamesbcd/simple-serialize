@@ -355,9 +355,9 @@ def _get_serializers_for_decorated_class(cls: type) -> tuple[Serializer, Deseria
 
     Callback selection prefers the class's ``_serialize`` or ``_deserialize``
     method. Otherwise enums, dataclasses, and ordinary classes use their
-    respective built-in implementations.     A classmethod deserializer is unbound so registration can invoke it with
-    the class as its first argument. Both custom methods receive options before
-    context.
+    respective built-in implementations. A classmethod deserializer is unbound so
+    registration can invoke it with the class as its first argument. Both custom
+    methods receive options before context.
 
     Args:
         cls: Class being registered.
