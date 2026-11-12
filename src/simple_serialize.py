@@ -20,7 +20,6 @@ from typing import Any, Callable, Iterable, cast, TypeVar, overload
 __all__ = [
     "TYPE_KEY",
     "DATA_KEY",
-    "Context",
     "Serializer",
     "Deserializer",
     "Pathlike",
@@ -38,35 +37,11 @@ TYPE_KEY = "__type__"
 DATA_KEY = "__data__"
 
 
-class Context:
-    '''Carry optional caller-supplied state through serialization operations.
-
-    The context is passed to custom serializers and deserializers. It is
-    currently only a transport for caller-provided values; the library itself
-    does not interpret them.
-
-    Attributes:
-        args: Positional values supplied when the context was created.
-        kwargs: Named values supplied when the context was created.
-    '''
-
-    def __init__(self, *args, **kwargs):
-        '''Store positional and keyword context values.
-
-        Args:
-            *args: Positional values available to serializers and deserializers.
-            **kwargs: Named values available to serializers and deserializers.
-        '''
-        # Preserve caller-supplied context for custom serialization callbacks.
-        self.args = args
-        self.kwargs = kwargs
-
-
 # Type aliases for serializer and deserializer callables
-# Serializer takes an object and context and returns a JSON-serializable representation
-# Deserializer takes a class, JSON data, and context and returns an object instance.
-Serializer = Callable[[object, Context], object]
-Deserializer = Callable[[type, object, Context], object]
+# Serializer takes an object and optional opaque context and returns JSON data.
+# Deserializer takes a class, JSON data, and optional opaque context.
+Serializer = Callable[[object, object | None], object]
+Deserializer = Callable[[type, object, object | None], object]
 
 
 class _Registry:
@@ -159,7 +134,7 @@ def register(cls: type,
 
     Args:
         cls: The Python class to register.
-        serializer: Callable receiving an instance and :class:`Context`, and
+        serializer: Callable receiving an instance and optional opaque context, and
             returning data that can be encoded as JSON.
         deserializer: Callable receiving the class, decoded data, and context,
             and returning an instance.
@@ -177,7 +152,7 @@ def register(cls: type,
 Pathlike = str | os.PathLike | pathlib.Path
 
 
-def save(obj: object, path: Pathlike, ctx: Context | None = None) -> None:
+def save(obj: object, path: Pathlike, ctx: object | None = None) -> None:
     '''Serialize ``obj`` as JSON and write it to ``path``.
 
     Missing parent directories are created. The object's type must be
@@ -186,7 +161,7 @@ def save(obj: object, path: Pathlike, ctx: Context | None = None) -> None:
     Args:
         obj: Object to serialize.
         path: Destination path.
-        ctx: Optional context passed to serializers.
+        ctx: Optional opaque object passed to serializers.
     '''
     path = pathlib.Path(path)
     pathlib.Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -194,7 +169,7 @@ def save(obj: object, path: Pathlike, ctx: Context | None = None) -> None:
     with path.open('w', encoding='utf-8') as file:
         file.write(json_str)
 
-def serialize(obj: object, ctx: Context | None = None) -> str:
+def serialize(obj: object, ctx: object | None = None) -> str:
     '''Encode an object as an indented JSON string.
 
     Registered objects are encoded with the reserved :data:`TYPE_KEY` and
@@ -206,14 +181,12 @@ def serialize(obj: object, ctx: Context | None = None) -> str:
 
     Args:
         obj: Value to encode. Non-JSON-native objects must be registered.
-        ctx: Optional context passed to serializers. A fresh empty context is
-            used when omitted.
+        ctx: Optional opaque object passed to serializers. ``None`` is passed
+            when omitted.
 
     Returns:
         A Unicode JSON string formatted with four-space indentation.
     '''
-    if ctx is None:
-        ctx = Context() # Empty for now, but may be used in future.
     return json.dumps(
         _prepare_for_json(obj, ctx),
         indent=4,
@@ -221,7 +194,7 @@ def serialize(obj: object, ctx: Context | None = None) -> str:
         default=lambda obj: _serialize_handler(obj, ctx),
     )
 
-def load(path: Pathlike, ctx: Context | None = None) -> object:
+def load(path: Pathlike, ctx: object | None = None) -> object:
     '''Read JSON from ``path`` and deserialize its value.
 
     Any registered types in the file must already be registered in this
@@ -229,7 +202,7 @@ def load(path: Pathlike, ctx: Context | None = None) -> object:
 
     Args:
         path: Source path.
-        ctx: Optional context passed to deserializers.
+        ctx: Optional opaque object passed to deserializers.
 
     Returns:
         The decoded Python value.
@@ -239,7 +212,7 @@ def load(path: Pathlike, ctx: Context | None = None) -> object:
         json_str = file.read()
     return deserialize(json_str, ctx)
 
-def deserialize(json_str: str, ctx: Context | None = None) -> object:
+def deserialize(json_str: str, ctx: object | None = None) -> object:
     '''Decode a JSON string into Python values and registered objects.
 
     Objects containing :data:`TYPE_KEY` are treated as registered-type
@@ -248,14 +221,12 @@ def deserialize(json_str: str, ctx: Context | None = None) -> object:
 
     Args:
         json_str: JSON text to decode.
-        ctx: Optional context passed to deserializers. A fresh empty context is
-            used when omitted.
+        ctx: Optional opaque object passed to deserializers. ``None`` is passed
+            when omitted.
 
     Returns:
         The decoded Python value.
     '''
-    if ctx is None:
-        ctx = Context()
     return json.loads(json_str, object_hook=lambda data: _deserialize_handler(data, ctx)) 
 
 #
@@ -263,7 +234,7 @@ def deserialize(json_str: str, ctx: Context | None = None) -> object:
 #
 def _prepare_for_json(
     obj: object,
-    ctx: Context,
+    ctx: object | None,
     active_ids: set[int] | None = None,
 ) -> object:
     '''Recursively convert registered values and containers for ``json.dumps``.
@@ -278,7 +249,7 @@ def _prepare_for_json(
 
     Args:
         obj: Value to prepare.
-        ctx: Context passed to any registered serializer.
+        ctx: Opaque object passed to any registered serializer.
         active_ids: Object identities on the current recursive path; initialized
             on the outermost call.
 
@@ -337,7 +308,7 @@ def _prepare_for_json(
 
     return obj
 
-def _serialize_handler(obj: object, ctx: Context):
+def _serialize_handler(obj: object, ctx: object | None):
     '''Encode a registered object as a type-name/data metadata dictionary.
 
     This function is also used as ``json.dumps``'s fallback for values not
@@ -345,7 +316,7 @@ def _serialize_handler(obj: object, ctx: Context):
 
     Args:
         obj: Registered object to encode.
-        ctx: Context passed to its serializer.
+        ctx: Opaque object passed to its serializer.
 
     Returns:
         A dictionary containing :data:`TYPE_KEY` and :data:`DATA_KEY`.
@@ -362,7 +333,7 @@ def _serialize_handler(obj: object, ctx: Context):
         DATA_KEY: serializer(obj, ctx)
     }
 
-def _deserialize_handler(input_dict: dict, ctx: Context) -> object:
+def _deserialize_handler(input_dict: dict, ctx: object | None) -> object:
     '''Reconstruct registered objects found by ``json.loads``'s object hook.
 
     Ordinary dictionaries are returned unchanged. A dictionary containing
@@ -371,7 +342,7 @@ def _deserialize_handler(input_dict: dict, ctx: Context) -> object:
 
     Args:
         input_dict: A decoded JSON object.
-        ctx: Context passed to registered deserializers.
+        ctx: Opaque object passed to registered deserializers.
 
     Returns:
         The original ordinary dictionary or its reconstructed object.
@@ -425,11 +396,11 @@ def serializable(cls_or_json_name: type | str, *args, **kwargs) -> Any:
 
     A decorated class can customize serialization by implementing:
 
-        def _serialize(self, ctx: Context) -> object:
+        def _serialize(self, ctx: object | None) -> object:
             # Return data that can be encoded as JSON.
     
         @classmethod
-        def _deserialize(cls, data: object, ctx: Context) -> object:
+        def _deserialize(cls, data: object, ctx: object | None) -> object:
             # Reconstruct and return an instance from the decoded data.
 
     Args:
@@ -531,7 +502,7 @@ def _get_slot_names(cls: type) -> set[str]:
     return names
 
 
-def standard_serializer(obj: object, ctx: Context) -> dict:
+def standard_serializer(obj: object, ctx: object | None) -> dict:
     '''Copy an ordinary object's instance attributes into a dictionary.
 
     Args:
@@ -558,7 +529,7 @@ def standard_serializer(obj: object, ctx: Context) -> dict:
         ) from e
     return new_obj
 
-def standard_deserializer(cls: type, data: object, ctx: Context) -> object:
+def standard_deserializer(cls: type, data: object, ctx: object | None) -> object:
     '''Construct an ordinary class and restore its instance attributes.
 
     The class must be constructible without arguments. The decoded data is
@@ -598,7 +569,7 @@ def standard_deserializer(cls: type, data: object, ctx: Context) -> object:
         ) from e
     return instance
 
-def iterable_serializer(obj: object, ctx: Context) -> list:
+def iterable_serializer(obj: object, ctx: object | None) -> list:
     '''Convert an iterable value to a list for JSON encoding.
 
     Args:
@@ -613,7 +584,7 @@ def iterable_serializer(obj: object, ctx: Context) -> list:
     return list(obj)
 
 
-def iterable_deserializer(cls: type, data: object, ctx: Context) -> Iterable:
+def iterable_deserializer(cls: type, data: object, ctx: object | None) -> Iterable:
     '''Reconstruct a registered iterable class from decoded list data.
 
     Args:
@@ -635,7 +606,7 @@ register(set, iterable_serializer, iterable_deserializer)
 register(frozenset, iterable_serializer, iterable_deserializer)
 
 
-def mapping_serializer(obj: object, ctx: Context) -> dict:
+def mapping_serializer(obj: object, ctx: object | None) -> dict:
     '''Return a shallow dictionary copy of a mapping.
 
     Args:
@@ -649,7 +620,7 @@ def mapping_serializer(obj: object, ctx: Context) -> dict:
     return dict(obj)
 
 
-def mapping_deserializer(cls: type, data: object, ctx: Context) -> object:
+def mapping_deserializer(cls: type, data: object, ctx: object | None) -> object:
     '''Construct a mapping class from decoded dictionary data.
 
     Args:
@@ -664,7 +635,7 @@ def mapping_deserializer(cls: type, data: object, ctx: Context) -> object:
     return cls(data)
 
 
-def dataclass_serializer(obj: object, ctx: Context) -> dict:
+def dataclass_serializer(obj: object, ctx: object | None) -> dict:
     '''Serialize a dataclass instance as a field-name/value dictionary.
 
     Args:
@@ -682,7 +653,7 @@ def dataclass_serializer(obj: object, ctx: Context) -> dict:
     return {field.name: getattr(obj, field.name) for field in fields(obj)}
 
 
-def dataclass_deserializer(cls: type, data: object, ctx: Context) -> object:
+def dataclass_deserializer(cls: type, data: object, ctx: object | None) -> object:
     '''Reconstruct a dataclass by passing decoded fields to its constructor.
 
     Constructor-based reconstruction also supports frozen dataclasses without
@@ -734,7 +705,7 @@ def dataclass_deserializer(cls: type, data: object, ctx: Context) -> object:
 # We don't register a general enum serializer/deserializer here, because Enums are almost
 # always subclasses, and it's better to register the subclasses.
 
-def enum_serializer(obj: object, ctx: Context) -> dict:
+def enum_serializer(obj: object, ctx: object | None) -> dict:
     '''Represent an enum member by its underlying value.
 
     Args:
@@ -749,7 +720,7 @@ def enum_serializer(obj: object, ctx: Context) -> dict:
         "value": obj.value
     }
 
-def enum_deserializer(cls: type, data: object, ctx: Context) -> enum.Enum:
+def enum_deserializer(cls: type, data: object, ctx: object | None) -> enum.Enum:
     '''Reconstruct an enum member from its underlying value.
 
     Args:
@@ -765,7 +736,7 @@ def enum_deserializer(cls: type, data: object, ctx: Context) -> enum.Enum:
 
 # Bytes serializers and deserializers
 
-def bytes_serializer(obj: object, ctx: Context) -> dict:
+def bytes_serializer(obj: object, ctx: object | None) -> dict:
     '''Encode bytes as validated, ASCII base64 text.
 
     Args:
@@ -781,7 +752,7 @@ def bytes_serializer(obj: object, ctx: Context) -> dict:
         "value": base64.b64encode(obj).decode("ascii"),
     }
 
-def bytes_deserializer(cls: type, data: object, ctx: Context) -> bytes:
+def bytes_deserializer(cls: type, data: object, ctx: object | None) -> bytes:
     '''Decode the base64 representation produced by :func:`bytes_serializer`.
 
     Args:
@@ -805,7 +776,7 @@ register(bytes, bytes_serializer, bytes_deserializer)
 
 # Path serializers and deserializers
 
-def path_serializer(obj: object, ctx: Context) -> str:
+def path_serializer(obj: object, ctx: object | None) -> str:
     '''Encode a path using POSIX separators.
 
     Args:
@@ -819,7 +790,7 @@ def path_serializer(obj: object, ctx: Context) -> str:
     return obj.as_posix()
 
 
-def path_deserializer(cls: type, data: object, ctx: Context) -> pathlib.Path:
+def path_deserializer(cls: type, data: object, ctx: object | None) -> pathlib.Path:
     '''Reconstruct a platform-native path from a serialized path string.
 
     The value is first interpreted as a Windows path and normalized to POSIX
@@ -842,7 +813,7 @@ register(pathlib.Path, path_serializer, path_deserializer)
 
 # Datetime serializers and deserializers
 
-def isoformat_serializer(obj: object, ctx: Context) -> str:
+def isoformat_serializer(obj: object, ctx: object | None) -> str:
     '''Encode a date, time, or datetime using its ISO 8601 representation.
 
     Args:
@@ -857,7 +828,7 @@ def isoformat_serializer(obj: object, ctx: Context) -> str:
 
 
 def isoformat_deserializer(cls: type, data: object,
-                           ctx: Context) -> datetime.datetime | datetime.date | datetime.time:
+                           ctx: object | None) -> datetime.datetime | datetime.date | datetime.time:
     '''Reconstruct a registered temporal type from ISO 8601 text.
 
     Args:
@@ -876,7 +847,7 @@ register(datetime.date,     cast(Serializer, isoformat_serializer), cast(Deseria
 register(datetime.time,     cast(Serializer, isoformat_serializer), cast(Deserializer, isoformat_deserializer))
 
 
-def timedelta_serializer(obj: object, ctx: Context) -> dict[str, int]:
+def timedelta_serializer(obj: object, ctx: object | None) -> dict[str, int]:
     '''Encode a duration as exact integer day, second, and microsecond components.
 
     Args:
@@ -894,7 +865,7 @@ def timedelta_serializer(obj: object, ctx: Context) -> dict[str, int]:
     }
 
 
-def timedelta_deserializer(cls: type, data: object, ctx: Context) -> datetime.timedelta:
+def timedelta_deserializer(cls: type, data: object, ctx: object | None) -> datetime.timedelta:
     '''Reconstruct a duration from exact integer components. (Storing a floating-point
     number of seconds can fail to preserve the correct number of microseconds.)
 
@@ -920,7 +891,7 @@ register(datetime.timedelta, timedelta_serializer, timedelta_deserializer)
 
 # Regex serializers and deserializers
 
-def regex_serializer(obj: object, ctx: Context) -> dict:
+def regex_serializer(obj: object, ctx: object | None) -> dict:
     '''Encode a compiled regular expression's pattern and flags.
 
     Byte patterns use the same base64 representation as bytes values; string
@@ -928,7 +899,7 @@ def regex_serializer(obj: object, ctx: Context) -> dict:
 
     Args:
         obj: Compiled regular expression.
-        ctx: Context passed to bytes serialization when needed.
+        ctx: Opaque object passed to bytes serialization when needed.
 
     Returns:
         A dictionary containing the pattern and integer flags.
@@ -942,13 +913,13 @@ def regex_serializer(obj: object, ctx: Context) -> dict:
         "flags": obj.flags
     }
 
-def regex_deserializer(cls: type, data: object, ctx: Context) -> re.Pattern:
+def regex_deserializer(cls: type, data: object, ctx: object | None) -> re.Pattern:
     '''Recompile a regular expression from its stored pattern and flags.
 
     Args:
         cls: Unused class argument required by the deserializer interface.
         data: Dictionary containing a string or encoded byte pattern and flags.
-        ctx: Context passed to bytes deserialization for byte patterns.
+        ctx: Opaque object passed to bytes deserialization for byte patterns.
 
     Returns:
         A compiled regular expression.

@@ -11,7 +11,6 @@ from simple_serialize import (
     DATA_KEY,
     TYPE_KEY,
     _Registry,
-    Context,
     deserialize,
     load,
     register,
@@ -68,7 +67,7 @@ def test_standard_serializer_preserves_original_exception_as_cause():
             return super().__getattribute__(name)
 
     with pytest.raises(TypeError, match="Failed to serialize") as exc_info:
-        standard_serializer(BrokenObject(), Context())
+        standard_serializer(BrokenObject(), None)
 
     assert isinstance(exc_info.value.__cause__, ValueError)
     assert str(exc_info.value.__cause__) == "attribute access failed"
@@ -80,7 +79,7 @@ def test_standard_deserializer_preserves_original_exception_as_cause():
             raise ValueError("construction failed")
 
     with pytest.raises(TypeError, match="Failed to deserialize") as exc_info:
-        standard_deserializer(BrokenObject, {}, Context())
+        standard_deserializer(BrokenObject, {}, None)
 
     assert isinstance(exc_info.value.__cause__, ValueError)
     assert str(exc_info.value.__cause__) == "construction failed"
@@ -95,7 +94,7 @@ def test_dataclass_deserializer_preserves_original_exception_as_cause():
             raise ValueError("post-init failed")
 
     with pytest.raises(TypeError, match="Failed to deserialize") as exc_info:
-        dataclass_deserializer(BrokenDataclass, {"value": 1}, Context())
+        dataclass_deserializer(BrokenDataclass, {"value": 1}, None)
 
     assert isinstance(exc_info.value.__cause__, ValueError)
     assert str(exc_info.value.__cause__) == "post-init failed"
@@ -107,11 +106,13 @@ def test_custom_serializer_and_deserializer_round_trip():
         def __init__(self, value=0):
             self.value = value
 
-        def _serialize(self, ctx: Context):
+        def _serialize(self, ctx):
+            assert ctx is None
             return {"value": self.value * 2}
 
         @classmethod
-        def _deserialize(cls, data, ctx: Context):
+        def _deserialize(cls, data, ctx):
+            assert ctx is None
             return cls(data["value"] // 2)
 
     result = deserialize(serialize(TestCustom(21)))
@@ -126,19 +127,21 @@ def test_save_and_load_pass_context_to_custom_callbacks(tmp_path):
         def __init__(self, value):
             self.value = value
 
-        def _serialize(self, ctx: Context):
-            return {"value": self.value + ctx.kwargs["offset"]}
+        def _serialize(self, ctx):
+            assert ctx is supplied_ctx
+            return {"value": self.value + ctx["offset"]}
 
         @classmethod
-        def _deserialize(cls, data, ctx: Context):
-            return cls(data["value"] - ctx.kwargs["offset"])
+        def _deserialize(cls, data, ctx):
+            assert ctx is supplied_ctx
+            return cls(data["value"] - ctx["offset"])
 
     value = TestContextual(21)
-    ctx = Context(offset=10)
+    supplied_ctx = {"offset": 10}
     path = tmp_path / "context.json"
 
-    save(value, path, ctx)
-    result = load(path, ctx)
+    save(value, path, supplied_ctx)
+    result = load(path, supplied_ctx)
 
     assert isinstance(result, TestContextual)
     assert result.value == 21
@@ -402,11 +405,11 @@ def test_nested_registered_values_round_trip():
 def test_none_data_round_trips():
     @serializable("SerializeTestNone")
     class TestNone:
-        def _serialize(self, ctx: Context):
+        def _serialize(self, ctx):
             return None
 
         @classmethod
-        def _deserialize(cls, data, ctx: Context):
+        def _deserialize(cls, data, ctx):
             assert data is None
             return cls
 

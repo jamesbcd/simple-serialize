@@ -70,20 +70,20 @@ save(person, "data/person.json")
 restored = load("data/person.json")
 ```
 
-Both operations accept an optional `Context`, which is passed to custom
-serialization and deserialization callbacks:
+Both operations accept an optional opaque `ctx` value, which is passed to
+custom serialization and deserialization callbacks unchanged. If omitted,
+callbacks receive `None`:
 
 ```python
-from simple_serialize import Context, deserialize, serialize
+from simple_serialize import deserialize, serialize
 
-ctx = Context(offset=10)
+ctx = {"offset": 10}
 json_text = serialize(person, ctx)
 restored = deserialize(json_text, ctx)
 ```
 
-`Context` stores positional values in `ctx.args` and named values in
-`ctx.kwargs`. The library does not interpret those values; custom callbacks can
-use them as needed.
+The library does not inspect or modify `ctx`; define and interpret its structure
+in your own callbacks.
 
 ## Custom serialization
 
@@ -91,7 +91,7 @@ For a decorated class, define `_serialize(self, ctx)` and
 `_deserialize(cls, data, ctx)` to control its JSON data:
 
 ```python
-from simple_serialize import Context, serializable
+from simple_serialize import serializable
 
 
 @serializable
@@ -99,11 +99,11 @@ class Temperature:
     def __init__(self, celsius):
         self.celsius = celsius
 
-    def _serialize(self, ctx: Context):
+    def _serialize(self, ctx):
         return {"fahrenheit": self.celsius * 9 / 5 + 32}
 
     @classmethod
-    def _deserialize(cls, data, ctx: Context):
+    def _deserialize(cls, data, ctx):
         return cls((data["fahrenheit"] - 32) * 5 / 9)
 ```
 
@@ -113,7 +113,7 @@ decoded data, and context. The callbacks should return JSON-compatible data
 or a reconstructed instance, respectively.
 
 ```python
-from simple_serialize import Context, register
+from simple_serialize import register
 
 
 class ExternalValue:
@@ -121,11 +121,11 @@ class ExternalValue:
         self.value = value
 
 
-def serialize_external(obj: ExternalValue, ctx: Context):
+def serialize_external(obj: ExternalValue, ctx):
     return {"value": obj.value}
 
 
-def deserialize_external(cls, data, ctx: Context):
+def deserialize_external(cls, data, ctx):
     return cls(data["value"])
 
 
