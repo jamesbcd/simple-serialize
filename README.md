@@ -1,7 +1,7 @@
 # simple-serialize
 
 `simple-serialize` is a small Python library for serializing Python objects
-to and from JSON. Classes must be registered to be particpate, either by using
+to and from JSON. Classes must be registered to be participate, either by using
 the `@serializable` decorator (simplest), or the `register` function (for types
 you don't control). Use `serialize`/`deserialize` for converting to and from
 JSON strings, or `save`/`load` for writing and reading those strings to disk.
@@ -28,16 +28,13 @@ Decorate a class to make it serializable. Ordinary classes are serialized from t
 
 ```python
 from dataclasses import dataclass
-
 from simple_serialize import deserialize, serializable, serialize
-
 
 @serializable
 @dataclass
 class Person:
     name: str
     age: int
-
 
 person = Person("Ada", 36)
 json_text = serialize(person)
@@ -59,15 +56,14 @@ Registered objects are represented in JSON by a type name and serialized data.
 }
 ```
 
-Passing a string argument to @serializable will use that string instead of the class name
-as the value of the `__type__` key. Use an explicit name when the JSON type name should remain stable if the Python class is renamed.
+Passing a string argument to `@serializable` will use that string instead of the class
+name as the value of the `__type__` key. Use an explicit name when the JSON type name should remain stable if the Python class is renamed.
 
 For a class you can't decorate, use the `register` function, and supply serializer 
 and deserializer functions. For example:
 
 ```python
 from simple_serialize import register
-
 
 class ExternalValue: # Some externally defined class you don't control
     def __init__(self, value):
@@ -96,7 +92,7 @@ The class must be registered in the current Python process before its serialized
 value can be deserialized.
 
 Serializer callbacks receive the instance, an options dictionary, and an opaque context
-context object (see below). They should return JSON-compatible data. Deserializers receive the class, decoded data, options dictionary, and context object. They should return a reconstructed instance. Additional keyword arguments to `register` become the options dictionary; `json_name` continues to select the JSON type name.
+context object (see below). They should return JSON-compatible data. Deserializers receive the class, decoded data, options dictionary, and context object. They should return a reconstructed instance. Additional keyword arguments to `register` become the `options` dictionary; `json_name` continues to select the JSON type name.
 
 ## JSON strings and files
 
@@ -164,7 +160,6 @@ and from JSON. Decorator keyword arguments are available in the `options` dictio
 
 ```python
 from simple_serialize import serializable
-
 
 @serializable(scale=1.8)
 class Temperature:
@@ -234,6 +229,10 @@ Install the test dependency and run pytest:
 python -m pip install '.[test]'
 python -m pytest
 ```
+
+## AI Usage
+
+This project was developed with the assistance of Github Copilot, mostly using the GPT-6 Luna model.
 
 ## License
 

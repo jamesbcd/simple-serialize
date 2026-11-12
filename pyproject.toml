@@ -17,6 +17,9 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 
+[project.urls]
+Repository = "https://github.com/jamesbcd/simple-serialize"
+
 [project.optional-dependencies]
 test = ["pytest>=7"]
 
