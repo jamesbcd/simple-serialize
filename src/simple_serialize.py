@@ -127,6 +127,10 @@ class _Registry:
                 options, and context.
             json_name: Type name stored in JSON; defaults to ``cls.__name__``.
             **options: Registration-specific options passed to both callbacks.
+                Built-in attribute handlers recognize ``exclude`` (names to
+                omit), ``select`` (names to include; takes precedence over
+                ``exclude``), and ``rename`` (Python names to JSON names, and
+                back during deserialization).
 
         Raises:
             TypeError: If either callback is not callable.
@@ -169,7 +173,11 @@ def register(cls: type,
             dictionary, and context, and returning an instance.
         json_name: Optional type name stored in the JSON representation.
             Defaults to the class name.
-        **options: Registration-specific keyword options passed to both callbacks.
+        **options: Registration-specific options passed to both callbacks.
+            Built-in attribute handlers recognize ``exclude`` (names to omit),
+            ``select`` (names to include; takes precedence over ``exclude``),
+            and ``rename`` (Python names to JSON names, and back during
+            deserialization). Custom callbacks control how they use options.
 
     Raises:
         TypeError: If either callback is not callable.
@@ -449,8 +457,12 @@ def serializable(
         cls_or_json_name: The class to decorate, or an optional custom JSON type
             name when used as a decorator factory.
         *args: Accepted for decorator-call compatibility; not interpreted.
-        **options: Registration-specific keyword options. ``json_name`` may be
-            used to set the JSON type name when decorating.
+        **options: Registration-specific options passed to both callbacks.
+            Built-in attribute handlers recognize ``exclude`` (names to omit),
+            ``select`` (names to include; takes precedence over ``exclude``),
+            and ``rename`` (Python names to JSON names, and back during
+            deserialization). Custom callbacks control how they use options.
+            ``json_name`` may be used to set the JSON type name when decorating.
 
     Returns:
         The decorated class, or a decorator when given options.
@@ -550,7 +562,11 @@ def _get_slot_names(cls: type) -> set[str]:
 def _attribute_options(
     options: dict[str, object],
 ) -> tuple[set[str] | None, set[str], dict[str, str]]:
-    '''Return validated select, exclude, and rename attribute options.'''
+    '''Validate attribute options and return select, exclude, and rename.
+
+    ``select`` names the only attributes to include and takes precedence over
+    ``exclude``; ``rename`` maps Python attribute names to JSON names.
+    '''
     select = options.get("select")
     if select is not None and (
         not isinstance(select, list)
@@ -579,7 +595,11 @@ def _attribute_options(
 def _serialize_attributes(
     attributes: dict[str, object], options: dict[str, object]
 ) -> dict[str, object]:
-    '''Filter and rename an attribute dictionary using registration options.'''
+    '''Filter and rename an attribute dictionary using registration options.
+
+    ``exclude`` omits names, ``select`` includes only listed names and
+    overrides ``exclude``, and ``rename`` maps Python names to JSON names.
+    '''
     select, exclude, rename = _attribute_options(options)
     serialized = {}
     for name, value in attributes.items():
@@ -600,7 +620,7 @@ def _serialize_attributes(
 def _deserialize_attributes(
     attributes: dict[str, object], options: dict[str, object]
 ) -> dict[str, object]:
-    '''Map serialized attribute names back to their Python names.'''
+    '''Map renamed JSON names back to Python names using ``rename`` options.'''
     _, _, rename = _attribute_options(options)
     original_names = {alias: name for name, alias in rename.items()}
     return {
@@ -614,6 +634,9 @@ def standard_serializer(obj: object, options: dict[str, object], ctx: object | N
 
     Args:
         obj: Object whose ``__dict__`` and ``__slots__`` will be copied.
+        options: Registration options: ``exclude`` omits names, ``select``
+            includes only listed names and takes precedence over ``exclude``,
+            and ``rename`` maps Python names to JSON names.
         ctx: Unused context, accepted to match the serializer interface.
 
     Returns:
@@ -645,6 +668,8 @@ def standard_deserializer(cls: type, data: object, options: dict[str, object], c
     Args:
         cls: Class to instantiate.
         data: Mapping of instance attribute names to values.
+        options: Registration options; ``rename`` maps JSON names back to
+            Python names. ``select`` and ``exclude`` don't affect deserialization.
         ctx: Unused context, accepted to match the deserializer interface.
 
     Returns:
@@ -681,6 +706,9 @@ def dataclass_serializer(obj: object, options: dict[str, object], ctx: object | 
 
     Args:
         obj: Dataclass instance to serialize.
+        options: Registration options: ``exclude`` omits field names,
+            ``select`` includes only listed names and takes precedence over
+            ``exclude``, and ``rename`` maps Python names to JSON names.
         ctx: Unused context, accepted to match the serializer interface.
 
     Returns:
@@ -704,6 +732,8 @@ def dataclass_deserializer(cls: type, data: object, options: dict[str, object], 
     Args:
         cls: Dataclass type to construct.
         data: Mapping of field names to decoded values.
+        options: Registration options; ``rename`` maps JSON names back to
+            Python field names. ``select`` and ``exclude`` don't affect deserialization.
         ctx: Unused context, accepted to match the deserializer interface.
 
     Returns:
@@ -777,32 +807,57 @@ register(frozenset, iterable_serializer, iterable_deserializer)
 
 
 def mapping_serializer(obj: object, options: dict[str, object], ctx: object | None) -> dict:
-    '''Return a shallow dictionary copy of a mapping.
+    '''Copy a mapping, applying attribute options to its string keys.
 
     Args:
         obj: Mapping value to copy.
+        options: Registration options: ``exclude`` omits string keys,
+            ``select`` includes only listed string keys and takes precedence
+            over ``exclude``, and ``rename`` maps keys to JSON names.
         ctx: Unused context, accepted to match the serializer interface.
 
     Returns:
-        A plain ``dict`` containing the same key-value pairs.
+        A plain ``dict`` containing the selected, renamed key-value pairs.
+
+    Raises:
+        TypeError: If attribute options are used with non-string mapping keys.
     '''
     obj = cast(dict, obj)
-    return dict(obj)
+    mapping = dict(obj)
+    select, exclude, rename = _attribute_options(options)
+    if select is None and not exclude and not rename:
+        return mapping
+    if not all(isinstance(name, str) for name in mapping):
+        raise TypeError("Mapping keys must be strings when attribute options are used")
+    return _serialize_attributes(cast(dict[str, object], mapping), options)
 
 
 def mapping_deserializer(cls: type, data: object, options: dict[str, object], ctx: object | None) -> object:
-    '''Construct a mapping class from decoded dictionary data.
+    '''Construct a mapping class from decoded, renamed dictionary data.
 
     Args:
         cls: Mapping class to construct.
         data: Decoded dictionary.
+        options: Registration options; ``rename`` maps JSON keys back to their
+            original names. ``select`` and ``exclude`` don't affect deserialization.
         ctx: Unused context, accepted to match the deserializer interface.
 
     Returns:
         ``cls(data)``.
+
+    Raises:
+        TypeError: If attribute options are used with non-string mapping keys.
     '''
-    data = cast(dict, data)
-    return cls(data)
+    mapping = dict(cast(dict, data))
+    select, exclude, rename = _attribute_options(options)
+    if (select is not None or exclude or rename) and not all(
+        isinstance(name, str) for name in mapping
+    ):
+        raise TypeError("Mapping keys must be strings when attribute options are used")
+    attributes = _deserialize_attributes(
+        cast(dict[str, object], mapping), options
+    )
+    return cls(attributes)
 
 #
 # Custom serializers and deserializers for common types

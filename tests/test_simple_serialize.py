@@ -14,6 +14,8 @@ from simple_serialize import (
     _Registry,
     deserialize,
     load,
+    mapping_deserializer,
+    mapping_serializer,
     register,
     save,
     serializable,
@@ -287,6 +289,36 @@ def test_dataclass_attribute_options_round_trip():
 
     assert json.loads(serialized)[DATA_KEY] == {"firstName": "Ada"}
     assert deserialize(serialized) == TestPerson("Ada")
+
+
+def test_mapping_callbacks_apply_attribute_options():
+    class TestMapping(dict):
+        pass
+
+    register(
+        TestMapping,
+        mapping_serializer,
+        mapping_deserializer,
+        json_name="SerializeTestMappingOptions",
+        select=["name", "secret"],
+        exclude=["secret"],
+        rename={"name": "displayName", "secret": "private"},
+    )
+    value = TestMapping(
+        name="Ada",
+        secret="hidden",
+        extra="excluded by select",
+    )
+
+    serialized = serialize(value)
+
+    assert json.loads(serialized)[DATA_KEY] == {
+        "displayName": "Ada",
+        "private": "hidden",
+    }
+    result = deserialize(serialized)
+    assert isinstance(result, TestMapping)
+    assert result == {"name": "Ada", "secret": "hidden"}
 
 
 def test_registered_subclass_takes_priority_over_registered_base():

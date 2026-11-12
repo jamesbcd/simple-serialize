@@ -115,6 +115,10 @@ An excluded or unselected value is not present in the JSON data. It therefore
 needs a suitable default or otherwise compatible constructor if the object is
 to be deserialized. Custom serialization callbacks receive these options in
 their options dictionary and remain responsible for applying them.
+The exported `mapping_serializer` and `mapping_deserializer` callbacks apply
+them to mapping keys when you register those callbacks for a mapping class.
+Native dictionaries are serialized as ordinary JSON objects and are not
+filtered or renamed.
 
 ## Custom serialization
 
