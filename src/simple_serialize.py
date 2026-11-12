@@ -189,6 +189,7 @@ _registry = _Registry()
 # 
 # Public API for registering and using serializers
 #
+
 def register(cls: type,
              serializer: Serializer,
              deserializer: Deserializer,
@@ -219,10 +220,8 @@ def register(cls: type,
     '''
     _registry.register(cls, serializer, deserializer, json_name, **options)
 
-
 # Accepted path values for :func:`save`.
 Pathlike = str | os.PathLike | pathlib.Path
-
 
 def save(obj: object, path: Pathlike, ctx: object | None = None) -> None:
     '''Serialize ``obj`` as JSON and write it to ``path``.
@@ -304,6 +303,7 @@ def deserialize(json_str: str, ctx: object | None = None) -> object:
 #
 # Internal helper functions for working with JSON serialization and deserialization
 #
+
 def _prepare_for_json(
     obj: object,
     ctx: object | None,
@@ -438,7 +438,7 @@ def _deserialize_handler(input_dict: dict, ctx: object | None) -> object:
     return deserializer(cls, data, options, ctx)
 
 #
-# Decorator for easiest way to register serializable classes
+# Serializable class decorator: the easiest way to register serializable classes
 #
 
 # We have to do some type overloading to support both usage patterns of the decorator:
@@ -574,94 +574,8 @@ def _get_serializers_for_decorated_class(cls: type) -> tuple[Serializer, Deseria
     return serializer, deserializer
 
 #
-# Standard serializers and deserializers
+# Standard object handlers
 #
-
-def _get_slot_names(cls: type) -> set[str]:
-    '''Return the slot attribute names declared across ``cls``'s MRO.'''
-    names = set()
-    for base in cls.__mro__:
-        slots = base.__dict__.get("__slots__", ())
-        if isinstance(slots, str):
-            slots = (slots,)
-        for name in slots:
-            if name in ("__dict__", "__weakref__"):
-                continue
-            if name.startswith("__") and not name.endswith("__"):
-                name = f"_{base.__name__.lstrip('_')}{name}"
-            names.add(name)
-    return names
-
-
-def _attribute_options(
-    options: dict[str, object],
-) -> tuple[set[str] | None, set[str], dict[str, str]]:
-    '''Validate attribute options and return select, exclude, and rename.
-
-    ``select`` names the only attributes to include and takes precedence over
-    ``exclude``; ``rename`` maps Python attribute names to JSON names.
-    '''
-    select = options.get("select")
-    if select is not None and (
-        not isinstance(select, list)
-        or not all(isinstance(name, str) for name in select)
-    ):
-        raise TypeError("select option must be a list of attribute names")
-    exclude = options.get("exclude", [])
-    if (
-        not isinstance(exclude, list)
-        or not all(isinstance(name, str) for name in exclude)
-    ):
-        raise TypeError("exclude option must be a list of attribute names")
-    rename = options.get("rename", {})
-    if not isinstance(rename, dict) or not all(
-        isinstance(name, str) and isinstance(alias, str)
-        for name, alias in rename.items()
-    ):
-        raise TypeError("rename option must map attribute names to strings")
-    return (
-        set(select) if select is not None else None,
-        set(exclude),
-        cast(dict[str, str], rename),
-    )
-
-
-def _serialize_attributes(
-    attributes: dict[str, object], options: dict[str, object]
-) -> dict[str, object]:
-    '''Filter and rename an attribute dictionary using registration options.
-
-    ``exclude`` omits names, ``select`` includes only listed names and
-    overrides ``exclude``, and ``rename`` maps Python names to JSON names.
-    '''
-    select, exclude, rename = _attribute_options(options)
-    serialized = {}
-    for name, value in attributes.items():
-        if select is not None:
-            if name not in select:
-                continue
-        elif name in exclude:
-            continue
-        serialized_name = rename.get(name, name)
-        if serialized_name in serialized:
-            raise ValueError(
-                f"Multiple attributes serialize as {serialized_name!r}"
-            )
-        serialized[serialized_name] = value
-    return serialized
-
-
-def _deserialize_attributes(
-    attributes: dict[str, object], options: dict[str, object]
-) -> dict[str, object]:
-    '''Map renamed JSON names back to Python names using ``rename`` options.'''
-    _, _, rename = _attribute_options(options)
-    original_names = {alias: name for name, alias in rename.items()}
-    return {
-        original_names.get(name, name): value
-        for name, value in attributes.items()
-    }
-
 
 def standard_serializer(obj: object, options: dict[str, object], ctx: object | None) -> dict:
     '''Copy an ordinary object's instance attributes into a dictionary.
@@ -735,6 +649,93 @@ def standard_deserializer(cls: type, data: object, options: dict[str, object], c
         ) from e
     return instance
 
+def _get_slot_names(cls: type) -> set[str]:
+    '''Return the slot attribute names declared across ``cls``'s MRO.'''
+    names = set()
+    for base in cls.__mro__:
+        slots = base.__dict__.get("__slots__", ())
+        if isinstance(slots, str):
+            slots = (slots,)
+        for name in slots:
+            if name in ("__dict__", "__weakref__"):
+                continue
+            if name.startswith("__") and not name.endswith("__"):
+                name = f"_{base.__name__.lstrip('_')}{name}"
+            names.add(name)
+    return names
+
+def _attribute_options(
+    options: dict[str, object],
+) -> tuple[set[str] | None, set[str], dict[str, str]]:
+    '''Validate attribute options and return select, exclude, and rename.
+
+    ``select`` names the only attributes to include and takes precedence over
+    ``exclude``; ``rename`` maps Python attribute names to JSON names.
+    '''
+    select = options.get("select")
+    if select is not None and (
+        not isinstance(select, list)
+        or not all(isinstance(name, str) for name in select)
+    ):
+        raise TypeError("select option must be a list of attribute names")
+    exclude = options.get("exclude", [])
+    if (
+        not isinstance(exclude, list)
+        or not all(isinstance(name, str) for name in exclude)
+    ):
+        raise TypeError("exclude option must be a list of attribute names")
+    rename = options.get("rename", {})
+    if not isinstance(rename, dict) or not all(
+        isinstance(name, str) and isinstance(alias, str)
+        for name, alias in rename.items()
+    ):
+        raise TypeError("rename option must map attribute names to strings")
+    return (
+        set(select) if select is not None else None,
+        set(exclude),
+        cast(dict[str, str], rename),
+    )
+
+def _serialize_attributes(
+    attributes: dict[str, object], options: dict[str, object]
+) -> dict[str, object]:
+    '''Filter and rename an attribute dictionary using registration options.
+
+    ``exclude`` omits names, ``select`` includes only listed names and
+    overrides ``exclude``, and ``rename`` maps Python names to JSON names.
+    '''
+    select, exclude, rename = _attribute_options(options)
+    serialized = {}
+    for name, value in attributes.items():
+        if select is not None:
+            if name not in select:
+                continue
+        elif name in exclude:
+            continue
+        serialized_name = rename.get(name, name)
+        if serialized_name in serialized:
+            raise ValueError(
+                f"Multiple attributes serialize as {serialized_name!r}"
+            )
+        serialized[serialized_name] = value
+    return serialized
+
+
+def _deserialize_attributes(
+    attributes: dict[str, object], options: dict[str, object]
+) -> dict[str, object]:
+    '''Map renamed JSON names back to Python names using ``rename`` options.'''
+    _, _, rename = _attribute_options(options)
+    original_names = {alias: name for name, alias in rename.items()}
+    return {
+        original_names.get(name, name): value
+        for name, value in attributes.items()
+    }
+
+#
+# Dataclass handlers
+#
+
 def dataclass_serializer(obj: object, options: dict[str, object], ctx: object | None) -> dict:
     '''Serialize a dataclass instance as a field-name/value dictionary.
 
@@ -755,7 +756,6 @@ def dataclass_serializer(obj: object, options: dict[str, object], ctx: object | 
         raise TypeError(f"Object of type {type(obj).__name__} is not a dataclass")
     attributes = {field.name: getattr(obj, field.name) for field in fields(obj)}
     return _serialize_attributes(attributes, options)
-
 
 def dataclass_deserializer(cls: type, data: object, options: dict[str, object], ctx: object | None) -> object:
     '''Reconstruct a dataclass by passing decoded fields to its constructor.
@@ -803,6 +803,10 @@ def dataclass_deserializer(cls: type, data: object, options: dict[str, object], 
         ) from e
     return instance
 
+#
+# Basic collection handlers
+#
+
 def iterable_serializer(obj: object, options: dict[str, object], ctx: object | None) -> list:
     '''Convert an iterable value to a list for JSON encoding.
 
@@ -817,7 +821,6 @@ def iterable_serializer(obj: object, options: dict[str, object], ctx: object | N
     obj = cast(Iterable, obj)
     return list(obj)
 
-
 def iterable_deserializer(cls: type, data: object, options: dict[str, object], ctx: object | None) -> Iterable:
     '''Reconstruct a registered iterable class from decoded list data.
 
@@ -831,49 +834,6 @@ def iterable_deserializer(cls: type, data: object, options: dict[str, object], c
     '''
     data = cast(list, data)
     return cls(data)
-
-
-# Tuples, sets, and frozensets are encoded as JSON arrays and rebuilt from
-# those arrays by calling their constructors.
-register(tuple, iterable_serializer, iterable_deserializer)
-register(set, iterable_serializer, iterable_deserializer)
-register(frozenset, iterable_serializer, iterable_deserializer)
-
-
-def range_serializer(obj: object, options: dict[str, object], ctx: object | None) -> dict[str, int]:
-    '''Encode a range using its start, stop, and step values.'''
-    obj = cast(range, obj)
-    return {"start": obj.start, "stop": obj.stop, "step": obj.step}
-
-
-def range_deserializer(cls: type, data: object, options: dict[str, object], ctx: object | None) -> range:
-    '''Reconstruct a range from its start, stop, and step values.'''
-    data = cast(dict, data)
-    values = (data.get("start"), data.get("stop"), data.get("step"))
-    if not all(type(value) is int for value in values):
-        raise TypeError("Range data must contain integer start, stop, and step values")
-    return range(*values)
-
-
-register(range, range_serializer, range_deserializer)
-
-
-def slice_serializer(obj: object, options: dict[str, object], ctx: object | None) -> dict[str, object]:
-    '''Encode a slice using its start, stop, and step values.'''
-    obj = cast(slice, obj)
-    return {"start": obj.start, "stop": obj.stop, "step": obj.step}
-
-
-def slice_deserializer(cls: type, data: object, options: dict[str, object], ctx: object | None) -> slice:
-    '''Reconstruct a slice from its start, stop, and step values.'''
-    data = cast(dict, data)
-    if not all(key in data for key in ("start", "stop", "step")):
-        raise TypeError("Slice data must contain start, stop, and step values")
-    return slice(data["start"], data["stop"], data["step"])
-
-
-register(slice, slice_serializer, slice_deserializer)
-
 
 def mapping_serializer(obj: object, options: dict[str, object], ctx: object | None) -> dict:
     '''Copy a mapping, applying attribute options to its string keys.
@@ -928,50 +888,62 @@ def mapping_deserializer(cls: type, data: object, options: dict[str, object], ct
     )
     return cls(attributes)
 
+# Tuples, sets, and frozensets are encoded as JSON arrays and rebuilt from
+# those arrays by calling their constructors.
+register(tuple, iterable_serializer, iterable_deserializer)
+register(set, iterable_serializer, iterable_deserializer)
+register(frozenset, iterable_serializer, iterable_deserializer)
+
 #
-# Custom serializers and deserializers for common types
+# Handlers for other built-in types
 #
 
-# Enum serializers and deserializers
 #
-# We don't register a general enum serializer/deserializer here, because Enums are almost
-# always subclasses, and it's better to register the subclasses.
+# Range handlers
+#
 
-def enum_serializer(obj: object, options: dict[str, object], ctx: object | None) -> dict:
-    '''Represent an enum member by its underlying value.
+def range_serializer(obj: object, options: dict[str, object], ctx: object | None) -> dict[str, int]:
+    '''Encode a range using its start, stop, and step values.'''
+    obj = cast(range, obj)
+    return {"start": obj.start, "stop": obj.stop, "step": obj.step}
 
-    Args:
-        obj: Enum member to serialize.
-        ctx: Unused context, accepted to match the serializer interface.
-
-    Returns:
-        A dictionary with the member's value under ``"value"``.
-    '''
-    obj = cast(enum.Enum, obj)
-    return {
-        "value": obj.value
-    }
-
-def enum_deserializer(cls: type, data: object, options: dict[str, object], ctx: object | None) -> enum.Enum:
-    '''Reconstruct an enum member from its underlying value.
-
-    Args:
-        cls: Registered enum class.
-        data: Dictionary containing the member value.
-        ctx: Unused context, accepted to match the deserializer interface.
-
-    Returns:
-        The matching enum member.
-    '''
+def range_deserializer(cls: type, data: object, options: dict[str, object], ctx: object | None) -> range:
+    '''Reconstruct a range from its start, stop, and step values.'''
     data = cast(dict, data)
-    return cls(data["value"])
+    values = (data.get("start"), data.get("stop"), data.get("step"))
+    if not all(type(value) is int for value in values):
+        raise TypeError("Range data must contain integer start, stop, and step values")
+    return range(*values)
 
+register(range, range_serializer, range_deserializer)
+
+#
+# Slice handlers
+#
+
+def slice_serializer(obj: object, options: dict[str, object], ctx: object | None) -> dict[str, object]:
+    '''Encode a slice using its start, stop, and step values.'''
+    obj = cast(slice, obj)
+    return {"start": obj.start, "stop": obj.stop, "step": obj.step}
+
+
+def slice_deserializer(cls: type, data: object, options: dict[str, object], ctx: object | None) -> slice:
+    '''Reconstruct a slice from its start, stop, and step values.'''
+    data = cast(dict, data)
+    if not all(key in data for key in ("start", "stop", "step")):
+        raise TypeError("Slice data must contain start, stop, and step values")
+    return slice(data["start"], data["stop"], data["step"])
+
+register(slice, slice_serializer, slice_deserializer)
+
+#
+# Complex number handlers
+#
 
 def complex_serializer(obj: object, options: dict[str, object], ctx: object | None) -> dict[str, float]:
     '''Encode a complex number using its real and imaginary components.'''
     obj = cast(complex, obj)
     return {"real": obj.real, "imag": obj.imag}
-
 
 def complex_deserializer(cls: type, data: object, options: dict[str, object], ctx: object | None) -> complex:
     '''Reconstruct a complex number from its real and imaginary components.'''
@@ -987,11 +959,11 @@ def complex_deserializer(cls: type, data: object, options: dict[str, object], ct
         raise TypeError("Complex data must contain numeric real and imag values")
     return complex(real, imag)
 
-
 register(complex, complex_serializer, complex_deserializer)
 
-
+#
 # Bytes serializers and deserializers
+#
 
 def bytes_serializer(obj: object, options: dict[str, object], ctx: object | None) -> dict:
     '''Encode bytes as validated, ASCII base64 text.
@@ -1031,19 +1003,23 @@ def bytes_deserializer(cls: type, data: object, options: dict[str, object], ctx:
 
 register(bytes, bytes_serializer, bytes_deserializer)
 
+#
+# Bytearray handlers
+#
 
 def bytearray_serializer(obj: object, options: dict[str, object], ctx: object | None) -> dict:
     '''Encode a bytearray using the bytes base64 representation.'''
     return bytes_serializer(bytes(cast(bytearray, obj)), options, ctx)
 
-
 def bytearray_deserializer(cls: type, data: object, options: dict[str, object], ctx: object | None) -> bytearray:
     '''Reconstruct a bytearray from the bytes base64 representation.'''
     return bytearray(bytes_deserializer(bytes, data, options, ctx))
 
-
 register(bytearray, bytearray_serializer, bytearray_deserializer)
 
+#
+# Memoryview handlers
+#
 
 def memoryview_serializer(obj: object, options: dict[str, object], ctx: object | None) -> dict[str, object]:
     '''Encode a contiguous memoryview's contents, format, shape, and access mode.'''
@@ -1064,7 +1040,6 @@ def memoryview_serializer(obj: object, options: dict[str, object], ctx: object |
         "readonly": view.readonly,
     }
 
-
 def memoryview_deserializer(cls: type, data: object, options: dict[str, object], ctx: object | None) -> memoryview:
     '''Reconstruct a contiguous memoryview from its contents and metadata.'''
     data = cast(dict, data)
@@ -1083,11 +1058,50 @@ def memoryview_deserializer(cls: type, data: object, options: dict[str, object],
     buffer = raw if readonly else bytearray(raw)
     return memoryview(buffer).cast(format, shape=shape)
 
-
 register(memoryview, memoryview_serializer, memoryview_deserializer)
 
+#
+# Handlers for more standard-libary types
+#
 
-# Path serializers and deserializers
+#
+# Enum handlers
+#
+# We don't register a general enum serializer/deserializer here, because Enums are almost
+# always subclasses, and it's better to register the subclasses.
+
+def enum_serializer(obj: object, options: dict[str, object], ctx: object | None) -> dict:
+    '''Represent an enum member by its underlying value.
+
+    Args:
+        obj: Enum member to serialize.
+        ctx: Unused context, accepted to match the serializer interface.
+
+    Returns:
+        A dictionary with the member's value under ``"value"``.
+    '''
+    obj = cast(enum.Enum, obj)
+    return {
+        "value": obj.value
+    }
+
+def enum_deserializer(cls: type, data: object, options: dict[str, object], ctx: object | None) -> enum.Enum:
+    '''Reconstruct an enum member from its underlying value.
+
+    Args:
+        cls: Registered enum class.
+        data: Dictionary containing the member value.
+        ctx: Unused context, accepted to match the deserializer interface.
+
+    Returns:
+        The matching enum member.
+    '''
+    data = cast(dict, data)
+    return cls(data["value"])
+
+#
+# Path handlers
+#
 
 def path_serializer(obj: object, options: dict[str, object], ctx: object | None) -> str:
     '''Encode a path using POSIX separators.
@@ -1101,7 +1115,6 @@ def path_serializer(obj: object, options: dict[str, object], ctx: object | None)
     '''
     obj = cast(pathlib.Path, obj)
     return obj.as_posix()
-
 
 def path_deserializer(cls: type, data: object, options: dict[str, object], ctx: object | None) -> pathlib.Path:
     '''Reconstruct a platform-native path from a serialized path string.
@@ -1120,11 +1133,11 @@ def path_deserializer(cls: type, data: object, options: dict[str, object], ctx: 
     '''
     return pathlib.Path(pathlib.PureWindowsPath(str(data)).as_posix())
 
-
 register(pathlib.Path, path_serializer, path_deserializer)
 
-
-# Datetime serializers and deserializers
+#
+# Date and time handlers
+#
 
 def isoformat_serializer(
     obj: object,
@@ -1155,7 +1168,6 @@ def isoformat_serializer(
         return data
     return value
 
-
 def isoformat_deserializer(cls: type, data: object, options: dict[str, object],
                            ctx: object | None) -> datetime.datetime | datetime.date | datetime.time:
     '''Reconstruct a registered temporal type from ISO 8601 text.
@@ -1184,11 +1196,9 @@ def isoformat_deserializer(cls: type, data: object, options: dict[str, object],
         return cls.fromisoformat(value).replace(fold=fold, tzinfo=tzinfo)
     return cls.fromisoformat(str(data))
 
-
 register(datetime.datetime, cast(Serializer, isoformat_serializer), cast(Deserializer, isoformat_deserializer))
 register(datetime.date,     cast(Serializer, isoformat_serializer), cast(Deserializer, isoformat_deserializer))
 register(datetime.time,     cast(Serializer, isoformat_serializer), cast(Deserializer, isoformat_deserializer))
-
 
 def timedelta_serializer(obj: object, options: dict[str, object], ctx: object | None) -> dict[str, int]:
     '''Encode a duration as exact integer day, second, and microsecond components.
@@ -1206,7 +1216,6 @@ def timedelta_serializer(obj: object, options: dict[str, object], ctx: object | 
         "seconds": obj.seconds,
         "microseconds": obj.microseconds,
     }
-
 
 def timedelta_deserializer(cls: type, data: object, options: dict[str, object], ctx: object | None) -> datetime.timedelta:
     '''Reconstruct a duration from exact integer components. (Storing a floating-point
@@ -1228,11 +1237,76 @@ def timedelta_deserializer(cls: type, data: object, options: dict[str, object], 
         microseconds=data["microseconds"],
     )
 
-
 register(datetime.timedelta, timedelta_serializer, timedelta_deserializer)
 
+def timezone_serializer(
+    obj: object,
+    options: dict[str, object],
+    ctx: object | None,
+) -> dict[str, object]:
+    '''Encode a fixed timezone by its exact offset and name.'''
+    value = cast(datetime.timezone, obj)
+    offset = value.utcoffset(None)
+    if offset is None:
+        raise TypeError("Timezone must have a fixed UTC offset")
+    return {
+        "offset_microseconds": (
+            (offset.days * 86400 + offset.seconds) * 1_000_000
+            + offset.microseconds
+        ),
+        "name": value.tzname(None),
+    }
 
-# Regex serializers and deserializers
+def timezone_deserializer(
+    cls: type,
+    data: object,
+    options: dict[str, object],
+    ctx: object | None,
+) -> datetime.timezone:
+    '''Reconstruct a fixed timezone from its exact offset and name.'''
+    if not isinstance(data, dict):
+        raise TypeError("Timezone data must contain an integer offset and optional name")
+    offset_microseconds = data.get("offset_microseconds")
+    name = data.get("name")
+    if (
+        type(offset_microseconds) is not int
+        or (name is not None and not isinstance(name, str))
+    ):
+        raise TypeError("Timezone data must contain an integer offset and optional name")
+    offset = datetime.timedelta(microseconds=offset_microseconds)
+    if name is None:
+        return datetime.timezone(offset)
+    return datetime.timezone(offset, name)
+
+register(datetime.timezone, timezone_serializer, timezone_deserializer)
+
+def zoneinfo_serializer(
+    obj: object,
+    options: dict[str, object],
+    ctx: object | None,
+) -> str:
+    '''Encode a ZoneInfo timezone by its IANA key.'''
+    key = cast(ZoneInfo, obj).key
+    if key is None:
+        raise TypeError("ZoneInfo values without a key cannot be serialized")
+    return key
+
+def zoneinfo_deserializer(
+    cls: type,
+    data: object,
+    options: dict[str, object],
+    ctx: object | None,
+) -> ZoneInfo:
+    '''Reconstruct a ZoneInfo timezone using its IANA key.'''
+    if not isinstance(data, str):
+        raise TypeError("ZoneInfo data must be a string key")
+    return ZoneInfo(data)
+
+register(ZoneInfo, zoneinfo_serializer, zoneinfo_deserializer)
+
+#
+# Regex handlers
+#
 
 def regex_serializer(obj: object, options: dict[str, object], ctx: object | None) -> dict:
     '''Encode a compiled regular expression's pattern and flags.
@@ -1277,11 +1351,13 @@ def regex_deserializer(cls: type, data: object, options: dict[str, object], ctx:
 _registry.register(re.Pattern, regex_serializer, regex_deserializer)
 _registry.register(re.RegexFlag, enum_serializer, enum_deserializer)
 
+#
+# Decimal handlers
+#
 
 def decimal_serializer(obj: object, options: dict[str, object], ctx: object | None) -> str:
     '''Encode a Decimal as text to preserve its exact value and exponent.'''
     return str(cast(decimal.Decimal, obj))
-
 
 def decimal_deserializer(cls: type, data: object, options: dict[str, object], ctx: object | None) -> decimal.Decimal:
     '''Reconstruct a Decimal from its exact text representation.'''
@@ -1289,14 +1365,15 @@ def decimal_deserializer(cls: type, data: object, options: dict[str, object], ct
         raise TypeError("Decimal data must be a string")
     return decimal.Decimal(data)
 
-
 register(decimal.Decimal, decimal_serializer, decimal_deserializer)
 
+#
+# UUID handlers
+#
 
 def uuid_serializer(obj: object, options: dict[str, object], ctx: object | None) -> str:
     '''Encode a UUID using its canonical hyphenated string representation.'''
     return str(cast(uuid.UUID, obj))
-
 
 def uuid_deserializer(cls: type, data: object, options: dict[str, object], ctx: object | None) -> uuid.UUID:
     '''Reconstruct a UUID from its canonical string representation.'''
@@ -1304,11 +1381,11 @@ def uuid_deserializer(cls: type, data: object, options: dict[str, object], ctx: 
         raise TypeError("UUID data must be a string")
     return uuid.UUID(data)
 
-
 register(uuid.UUID, uuid_serializer, uuid_deserializer)
 
-
-# Additional standard-library value handlers
+#
+# Fraction handlers
+#
 
 def fraction_serializer(
     obj: object,
@@ -1318,7 +1395,6 @@ def fraction_serializer(
     '''Encode a Fraction as its exact normalized numerator and denominator.'''
     value = cast(Fraction, obj)
     return {"numerator": value.numerator, "denominator": value.denominator}
-
 
 def fraction_deserializer(
     cls: type,
@@ -1337,80 +1413,11 @@ def fraction_deserializer(
         raise TypeError("Fraction denominator must not be zero")
     return Fraction(numerator, denominator)
 
-
 register(Fraction, fraction_serializer, fraction_deserializer)
 
-
-def timezone_serializer(
-    obj: object,
-    options: dict[str, object],
-    ctx: object | None,
-) -> dict[str, object]:
-    '''Encode a fixed timezone by its exact offset and name.'''
-    value = cast(datetime.timezone, obj)
-    offset = value.utcoffset(None)
-    if offset is None:
-        raise TypeError("Timezone must have a fixed UTC offset")
-    return {
-        "offset_microseconds": (
-            (offset.days * 86400 + offset.seconds) * 1_000_000
-            + offset.microseconds
-        ),
-        "name": value.tzname(None),
-    }
-
-
-def timezone_deserializer(
-    cls: type,
-    data: object,
-    options: dict[str, object],
-    ctx: object | None,
-) -> datetime.timezone:
-    '''Reconstruct a fixed timezone from its exact offset and name.'''
-    if not isinstance(data, dict):
-        raise TypeError("Timezone data must contain an integer offset and optional name")
-    offset_microseconds = data.get("offset_microseconds")
-    name = data.get("name")
-    if (
-        type(offset_microseconds) is not int
-        or (name is not None and not isinstance(name, str))
-    ):
-        raise TypeError("Timezone data must contain an integer offset and optional name")
-    offset = datetime.timedelta(microseconds=offset_microseconds)
-    if name is None:
-        return datetime.timezone(offset)
-    return datetime.timezone(offset, name)
-
-
-register(datetime.timezone, timezone_serializer, timezone_deserializer)
-
-
-def zoneinfo_serializer(
-    obj: object,
-    options: dict[str, object],
-    ctx: object | None,
-) -> str:
-    '''Encode a ZoneInfo timezone by its IANA key.'''
-    key = cast(ZoneInfo, obj).key
-    if key is None:
-        raise TypeError("ZoneInfo values without a key cannot be serialized")
-    return key
-
-
-def zoneinfo_deserializer(
-    cls: type,
-    data: object,
-    options: dict[str, object],
-    ctx: object | None,
-) -> ZoneInfo:
-    '''Reconstruct a ZoneInfo timezone using its IANA key.'''
-    if not isinstance(data, str):
-        raise TypeError("ZoneInfo data must be a string key")
-    return ZoneInfo(data)
-
-
-register(ZoneInfo, zoneinfo_serializer, zoneinfo_deserializer)
-
+#
+# IP address handlers
+#
 
 def ipaddress_serializer(
     obj: object,
@@ -1419,7 +1426,6 @@ def ipaddress_serializer(
 ) -> str:
     '''Encode an IP address, network, or interface in canonical text form.'''
     return str(obj)
-
 
 def ipaddress_deserializer(
     cls: type,
@@ -1432,7 +1438,6 @@ def ipaddress_deserializer(
         raise TypeError("IP address data must be a string")
     return cls(data)
 
-
 for _ip_type in (
     ipaddress.IPv4Address,
     ipaddress.IPv6Address,
@@ -1443,18 +1448,9 @@ for _ip_type in (
 ):
     register(_ip_type, ipaddress_serializer, ipaddress_deserializer)
 
-
-def _serialize_pairs(obj: object) -> list[list[object]]:
-    return [[key, value] for key, value in cast(Iterable, obj)]
-
-
-def _deserialize_pairs(data: object, type_name: str) -> list[list[object]]:
-    if not isinstance(data, list) or not all(
-        isinstance(pair, list) and len(pair) == 2 for pair in data
-    ):
-        raise TypeError(f"{type_name} data must be a list of key-value pairs")
-    return data
-
+#
+# Counter and OrderedDict handlers
+#
 
 def counter_serializer(
     obj: object,
@@ -1463,7 +1459,6 @@ def counter_serializer(
 ) -> list[list[object]]:
     '''Encode Counter items as pairs so non-string keys are preserved.'''
     return _serialize_pairs(cast(collections.Counter, obj).items())
-
 
 def counter_deserializer(
     cls: type,
@@ -1477,9 +1472,7 @@ def counter_deserializer(
         result[key] = count
     return result
 
-
 register(collections.Counter, counter_serializer, counter_deserializer)
-
 
 def ordered_dict_serializer(
     obj: object,
@@ -1488,7 +1481,6 @@ def ordered_dict_serializer(
 ) -> list[list[object]]:
     '''Encode OrderedDict items as pairs to preserve order and key types.'''
     return _serialize_pairs(cast(collections.OrderedDict, obj).items())
-
 
 def ordered_dict_deserializer(
     cls: type,
@@ -1499,9 +1491,21 @@ def ordered_dict_deserializer(
     '''Reconstruct an OrderedDict from ordered key-value pairs.'''
     return cls(_deserialize_pairs(data, "OrderedDict"))
 
-
 register(collections.OrderedDict, ordered_dict_serializer, ordered_dict_deserializer)
 
+def _serialize_pairs(obj: object) -> list[list[object]]:
+    return [[key, value] for key, value in cast(Iterable, obj)]
+
+def _deserialize_pairs(data: object, type_name: str) -> list[list[object]]:
+    if not isinstance(data, list) or not all(
+        isinstance(pair, list) and len(pair) == 2 for pair in data
+    ):
+        raise TypeError(f"{type_name} data must be a list of key-value pairs")
+    return data
+
+#
+# Deque handlers
+#
 
 def deque_serializer(
     obj: object,
@@ -1511,7 +1515,6 @@ def deque_serializer(
     '''Encode a deque's elements and optional maximum length.'''
     value = cast(collections.deque, obj)
     return {"items": list(value), "maxlen": value.maxlen}
-
 
 def deque_deserializer(
     cls: type,
@@ -1530,6 +1533,5 @@ def deque_deserializer(
     ):
         raise TypeError("Deque data must contain items and a non-negative maxlen")
     return cls(items, maxlen=maxlen)
-
 
 register(collections.deque, deque_serializer, deque_deserializer)
